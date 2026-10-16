@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Team Troy Training Portal</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Login -->
+  <main id="login" class="login" hidden>
+    <form id="loginForm" class="login-card" autocomplete="off">
+      <div class="brand-mark" aria-hidden="true">TT</div>
+      <h1>Team Troy Training Portal</h1>
+      <p class="muted">Enter the dashboard password to continue.</p>
+      <label for="pw" class="sr-only">Password</label>
+      <input id="pw" type="password" placeholder="Password" required autofocus>
+      <button type="submit" class="btn primary" id="loginBtn">Sign in</button>
+      <p id="loginError" class="error" role="alert"></p>
+    </form>
+  </main>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand"><span class="brand-mark sm" aria-hidden="true">TT</span><span><span id="teamTitle">Team Troy</span> Training</span></div>
+        <nav class="tabs" role="tablist" aria-label="Sections">
+          <button role="tab" data-view="overview" aria-selected="true">Overview</button>
+          <button role="tab" data-view="heatmap">Heatmap</button>
+          <button role="tab" data-view="skills">Skills</button>
+          <button role="tab" data-view="profile">VA Profile</button>
+          <button role="tab" data-view="pairings">Trainer Pairing</button>
+        </nav>
+        <div class="top-actions">
+          <button class="btn ghost" id="refreshBtn" title="Reload data from the sheet">Refresh</button>
+          <button class="btn ghost" id="themeBtn" title="Toggle light/dark">Theme</button>
+          <button class="btn ghost" id="logoutBtn">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main class="content">
+      <section id="view-overview" class="view"></section>
+      <section id="view-heatmap" class="view" hidden></section>
+      <section id="view-skills" class="view" hidden></section>
+      <section id="view-profile" class="view" hidden></section>
+      <section id="view-pairings" class="view" hidden></section>
+    </main>
+    <footer class="foot muted" id="foot"></footer>
+  </div>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
