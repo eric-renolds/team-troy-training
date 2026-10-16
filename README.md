@@ -10,7 +10,7 @@ A free dashboard to monitor Team Troy's VA skills and pair VAs with trainers.
 
 | Tab | What it holds | Edit it to… |
 |---|---|---|
-| `VAs` | VA Name, Email (optional), Active (Y/N) | replace the `VA 01…16` placeholders with real names; set Active = N to hide someone |
+| `VAs` | VA Name, Email (optional), Active (Y/N) | filled automatically: anyone who submits the form is added. Optionally pre-add names so "not submitted yet" is accurate; set Active = N to hide someone or a duplicate |
 | `Skills` | Skill Name, Category, Source | add the team's custom skills (Source = Custom) |
 | `Pairings` | ID, VA, Trainer, Trainer Type, Target Skills, Date | written by the dashboard; safe to read |
 | `Ratings` | demo ratings | ignored automatically once a Google Form is linked |
@@ -34,5 +34,7 @@ Edit `config.js` → `API_URL`. Leave it empty to preview with demo data.
 
 - **Share with VAs:** https://docs.google.com/forms/d/e/1FAIpQLSdYnMugPxZp6OBOhQMBi9aN1mRK4biAJCxQ4RVKYeOtIgA8Gg/viewform
 - **Edit:** https://docs.google.com/forms/d/11xX6Iyzrv9dj2-wcszLJ6WN2DPltQP57IHPyDH_Ingk/edit
-- After changing the `VAs` or `Skills` tabs, open the sheet → **Training Portal → Create / update skills form** to refresh the name list and skill grids.
+- VAs **type their own name** (free text). Matching ignores capitals and extra spaces, so `maria santos` and `Maria  Santos` count as one person, but `Maria` and `Maria Santos` would be two; fix a typo by editing the name in the `Form Responses 1` tab.
+- The `VA 01…16` placeholders are hidden automatically once real responses arrive.
+- After changing the `Skills` tab, open the sheet → **Training Portal → Create / update skills form** to refresh the skill grids.
 - The sample `Ratings` tab is used until the first real form response arrives; then the dashboard switches to `Form Responses 1`.

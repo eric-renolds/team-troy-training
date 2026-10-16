@@ -124,17 +124,19 @@ function syncSkillForm() {
     form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
   }
 
-  const vaNames = getData_().vas.map(v => v.name);
   const skills = rows_(TAB.SKILLS).filter(r => String(r[0]).trim())
     .map(r => ({ name: String(r[0]).trim(), category: String(r[1] || 'Other').trim() }));
   const byCat = {};
   skills.forEach(s => (byCat[s.category] = byCat[s.category] || []).push(s.name));
 
-  // 1. Name dropdown (keeps names identical to the VAs tab)
-  let nameItem = form.getItems(FormApp.ItemType.LIST).find(i => i.getTitle() === 'Your Name');
-  nameItem = nameItem ? nameItem.asListItem() : form.addListItem().setTitle('Your Name');
-  nameItem.setRequired(true).setHelpText('Pick your name from the list.').setChoiceValues(vaNames);
-  if (created) form.moveItem(nameItem.getIndex(), 0);
+  // 1. Name: free-text box (an older dropdown version is replaced)
+  form.getItems(FormApp.ItemType.LIST).filter(i => i.getTitle() === 'Your Name').forEach(i => form.deleteItem(i));
+  const found = form.getItems(FormApp.ItemType.TEXT).find(i => i.getTitle() === 'Your Name');
+  let nameItem;
+  if (found) nameItem = found.asTextItem();
+  else { nameItem = form.addTextItem().setTitle('Your Name'); form.moveItem(nameItem.getIndex(), 0); }
+  nameItem.setRequired(true)
+    .setHelpText('Enter your full name (first and last). Please spell it the same way every time you fill this in.');
 
   // 2. One 1–5 grid per skill category
   const grids = {};
@@ -201,14 +203,22 @@ function rows_(name) {
 
 const norm_ = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-function getData_() {
-  const vas = rows_(TAB.VAS)
-    .filter(r => String(r[0]).trim() && String(r[2] || 'Y').trim().toUpperCase() !== 'N')
-    .map(r => ({ name: String(r[0]).trim() }));
+const PLACEHOLDER_VA_ = /^VA \d{2}$/;
 
+function getData_() {
   const skills = rows_(TAB.SKILLS)
     .filter(r => String(r[0]).trim())
     .map(r => ({ name: String(r[0]).trim(), category: String(r[1] || 'Other').trim(), source: String(r[2] || 'Standard').trim() }));
+
+  // Ratings first: with real form data, anyone who submits joins the VA list.
+  const ratingsInfo = readRatings_(skills);
+  const fromForm = /^form responses/i.test(ratingsInfo.ratingsSource || '');
+  if (fromForm) addMissingVAs_(ratingsInfo.ratings.map(r => r.va));
+
+  let vas = rows_(TAB.VAS)
+    .filter(r => String(r[0]).trim() && String(r[2] || 'Y').trim().toUpperCase() !== 'N')
+    .map(r => ({ name: String(r[0]).trim() }));
+  if (fromForm) vas = vas.filter(v => !PLACEHOLDER_VA_.test(v.name)); // drop "VA 01…16" once real data exists
 
   const pairings = rows_(TAB.PAIRINGS)
     .filter(r => String(r[0]).trim())
@@ -218,7 +228,19 @@ function getData_() {
       date: r[5] instanceof Date ? r[5].toISOString() : String(r[5] || ''),
     }));
 
-  return Object.assign({ vas, skills, pairings, generatedAt: new Date().toISOString() }, readRatings_(skills));
+  return Object.assign({ vas, skills, pairings, generatedAt: new Date().toISOString() }, ratingsInfo);
+}
+
+/** Appends submitters who aren't in the VAs tab yet (matching ignores case and extra spaces). */
+function addMissingVAs_(names) {
+  const sh = getOrCreate_(SpreadsheetApp.getActiveSpreadsheet(), TAB.VAS, ['VA Name', 'Email (optional)', 'Active (Y/N)']);
+  const known = new Set(rows_(TAB.VAS).map(r => norm_(r[0])));
+  const add = [];
+  names.forEach(n => { const k = norm_(n); if (k && !known.has(k)) { known.add(k); add.push([String(n).trim().replace(/\s+/g, ' '), '', 'Y']); } });
+  if (!add.length) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try { sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add); } finally { lock.releaseLock(); }
 }
 
 /** Finds the ratings tab: a linked Google Form response tab first, else "Ratings". */
