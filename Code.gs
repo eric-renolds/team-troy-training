@@ -252,7 +252,7 @@ function ratingsSheet_() {
 
 function readRatings_(skills) {
   const sh = ratingsSheet_();
-  const out = { ratings: [], ratingsSource: sh ? sh.getName() : null, unmatchedColumns: [] };
+  const out = { ratings: [], submissions: [], ratingsSource: sh ? sh.getName() : null, unmatchedColumns: [] };
   if (!sh || sh.getLastRow() < 2) return out;
 
   const values = sh.getDataRange().getValues();
@@ -260,7 +260,7 @@ function readRatings_(skills) {
   const skillByNorm = {};
   skills.forEach(s => (skillByNorm[norm_(s.name)] = s.name));
 
-  let tsCol = -1, nameCol = -1;
+  let tsCol = -1, nameCol = -1, commentCol = -1;
   const skillCols = []; // [colIndex, skillName]
   headers.forEach((h, i) => {
     // Google Form grid questions look like "Rate your skills [Microsoft Excel]"
@@ -269,6 +269,7 @@ function readRatings_(skills) {
     if (skillByNorm[key]) { skillCols.push([i, skillByNorm[key]]); return; }
     if (tsCol < 0 && /timestamp/i.test(h)) { tsCol = i; return; }
     if (nameCol < 0 && /name/i.test(h)) { nameCol = i; return; }
+    if (commentCol < 0 && /comment/i.test(h)) { commentCol = i; return; }
     if (!/e-?mail|score|comment/i.test(h) && h.trim()) out.unmatchedColumns.push(m ? m[1] : h);
   });
   if (nameCol < 0) throw new Error('Ratings tab needs a column whose title contains "Name".');
@@ -283,12 +284,15 @@ function readRatings_(skills) {
       const n = String(r[c]).match(/[1-5]/);
       if (n) ratings[skill] = Number(n[0]);
     });
+    const comments = commentCol >= 0 ? String(r[commentCol] || '').trim() : '';
+    out.submissions.push({ va: name, timestamp: ts ? ts.toISOString() : null, ratings, comments });
     const key = norm_(name);
     const prev = latest[key];
-    if (!prev || !ts || !prev.ts || ts >= prev.ts) latest[key] = { name, ts, ratings };
+    if (!prev || !ts || !prev.ts || ts >= prev.ts) latest[key] = { name, ts, ratings, comments };
   });
+  out.submissions.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
 
-  out.ratings = Object.values(latest).map(x => ({ va: x.name, timestamp: x.ts ? x.ts.toISOString() : null, ratings: x.ratings }));
+  out.ratings = Object.values(latest).map(x => ({ va: x.name, timestamp: x.ts ? x.ts.toISOString() : null, ratings: x.ratings, comments: x.comments }));
   return out;
 }
 

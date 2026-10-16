@@ -12,7 +12,7 @@
   const THEME_KEY = 'tt_theme';
 
   const S = { pw: null, data: null, view: 'overview', profileVA: null, editing: null, form: null,
-              heat: { sort: 'name', cat: 'all', showMissing: true } };
+              heat: { sort: 'name', cat: 'all', showMissing: true }, resp: { q: '', latestOnly: false, open: null } };
 
   /* ---------------- utils ---------------- */
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -20,6 +20,8 @@
   const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const fmt1 = n => (n == null || isNaN(n) ? '–' : n.toFixed(1));
   const fmtDate = iso => { if (!iso) return '–'; const d = new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); };
+  const fmtDateTime = iso => { if (!iso) return '–'; const d = new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+  const subAvg = x => { const v = Object.values(x.ratings || {}).filter(n => n != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const initials = n => { const w = String(n).split(/\s+/).filter(Boolean); const last = w[w.length - 1] || ''; return /\d/.test(last) ? last.slice(0, 3) : w.slice(0, 2).map(x => x[0]).join('').toUpperCase(); };
   const store = {
     get(k, sess) { try { return (sess ? sessionStorage : localStorage).getItem(k); } catch (e) { return null; } },
@@ -67,7 +69,10 @@
       skills.forEach((s, j) => (r[s.name] = 1 + ((i * 7 + j * 3 + (i * j) % 4) % 5)));
       return { va: v.name, timestamp: new Date(Date.now() - i * 864e5).toISOString(), ratings: r };
     });
-    return { vas, skills, ratings, pairings: [], ratingsSource: 'Demo data', unmatchedColumns: [], generatedAt: new Date().toISOString() };
+    const submissions = ratings.map((r, k) => Object.assign({}, r, { comments: k % 4 === 0 ? 'Would like help with Excel formulas and pivot tables.' : '' }));
+    ratings.slice(0, 3).forEach(r => { const old = {}; Object.keys(r.ratings).forEach(k => (old[k] = Math.max(1, r.ratings[k] - 1))); submissions.push({ va: r.va, timestamp: new Date(new Date(r.timestamp).getTime() - 30 * 864e5).toISOString(), ratings: old, comments: '' }); });
+    submissions.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return { vas, skills, ratings, submissions, pairings: [], ratingsSource: 'Demo data', unmatchedColumns: [], generatedAt: new Date().toISOString() };
   })();
   function demoApi(action, x) {
     return new Promise(res => setTimeout(() => {
@@ -173,7 +178,7 @@
     if (M.outsiders.length) notes.push('Submissions from names not in the <strong>VAs</strong> tab: ' + M.outsiders.map(r => esc(r.va)).join(', '));
     b.hidden = !notes.length; b.className = 'banner' + (DEMO ? '' : ' warn'); b.innerHTML = notes.join('<br>');
     $('#foot').textContent = 'Data source: ' + (S.data.ratingsSource || 'none') + ' · Updated ' + new Date(S.data.generatedAt).toLocaleString();
-    ({ overview: rOverview, heatmap: rHeatmap, skills: rSkills, profile: rProfile, pairings: rPairings })[S.view](M, $('#view-' + S.view));
+    ({ overview: rOverview, heatmap: rHeatmap, skills: rSkills, profile: rProfile, pairings: rPairings, responses: rResponses })[S.view](M, $('#view-' + S.view));
   }
 
   function barList(items, opts) {
@@ -297,9 +302,66 @@
         '<div class="card"><h3>Training</h3>' +
           (pairs.length ? pairs.map(p => '<p style="margin:0 0 8px"><strong>Trainer:</strong> ' + esc(p.trainer) + ' <span class="chip">' + (p.trainerType === 'External' ? 'External' : 'Team VA') + '</span></p><div class="chips">' + p.skills.map(s => '<span class="chip accent">' + esc(s) + '</span>').join('') + '</div>').join('<hr style="border:0;border-top:1px solid var(--border);margin:12px 0">') : '<div class="empty">No trainer assigned.</div>') +
           (trainsOthers.length ? '<p class="hint" style="margin-top:14px">Also training: ' + trainsOthers.map(p => esc(p.va) + ' (' + p.skills.map(esc).join(', ') + ')').join('; ') + '</p>' : '') +
-        '</div></div>';
+        '</div></div>' +
+      (function () {
+        const subs = (S.data.submissions || []).filter(x => norm(x.va) === norm(va));
+        if (!subs.length) return '';
+        return '<div class="card"><div class="card-head"><h3>Submissions</h3><a href="#" id="pfResp">View in Responses →</a></div>' +
+          '<div class="table-wrap"><table><thead><tr><th>Submitted</th><th class="num">Average</th><th>Comments</th></tr></thead><tbody>' +
+          subs.map((x, i) => '<tr><td>' + fmtDateTime(x.timestamp) + (i === 0 ? ' <span class="chip accent">Latest</span>' : '') + '</td><td class="num">' + fmt1(subAvg(x)) + '</td><td>' + (x.comments ? esc(x.comments) : '<span class="muted">–</span>') + '</td></tr>').join('') +
+          '</tbody></table></div></div>';
+      })();
+    if ($('#pfResp')) $('#pfResp').onclick = e => { e.preventDefault(); S.resp.q = va; S.resp.open = null; setView('responses'); };
     $('#pfSel').onchange = e => { S.profileVA = e.target.value; render(); };
     $('#pfPair').onclick = () => { const p = pairs[0]; startForm(p ? Object.assign({}, p) : { va, trainerType: 'VA', trainer: '', skills: gaps.map(g => g.skill) }); setView('pairings'); };
+  }
+
+  /* ---- Responses (every form submission) ---- */
+  function rResponses(M, el) {
+    const all = S.data.submissions || [];
+    const latestKey = {}; all.forEach(x => { const k = norm(x.va); if (!(k in latestKey)) latestKey[k] = x; }); // list is newest first
+    const q = norm(S.resp.q);
+    let list = all.filter(x => !q || norm(x.va).includes(q) || norm(x.comments).includes(q));
+    if (S.resp.latestOnly) list = list.filter(x => latestKey[norm(x.va)] === x);
+    const skills = S.data.skills;
+    el.innerHTML =
+      '<div class="view-head"><div><h2>Responses</h2><p class="muted">Every skills-form submission, newest first' + (S.data.ratingsSource ? ' · source: ' + esc(S.data.ratingsSource) : '') + '.</p></div>' +
+        '<div class="toolbar"><input type="text" id="rsQ" placeholder="Search name or comment" value="' + esc(S.resp.q) + '" style="width:220px">' +
+          '<label class="chip"><input type="checkbox" id="rsLatest"' + (S.resp.latestOnly ? ' checked' : '') + '> Latest per VA only</label>' +
+          '<button class="btn" id="rsCsv">Download CSV</button></div></div>' +
+      '<div class="card">' +
+        (list.length ? '<div class="table-wrap"><table class="resp"><thead><tr><th>Submitted</th><th>VA</th><th class="num">Average</th><th class="num">Below 3</th><th>Comments</th><th></th></tr></thead><tbody>' +
+          list.map((x, i) => {
+            const id = all.indexOf(x), open = S.resp.open === id, a = subAvg(x);
+            const low = skills.filter(s => x.ratings[s.name] != null && x.ratings[s.name] < WEAK).length;
+            const isLatest = latestKey[norm(x.va)] === x;
+            return '<tr class="resp-row" data-open="' + id + '" style="cursor:pointer"><td style="white-space:nowrap">' + fmtDateTime(x.timestamp) + '</td>' +
+              '<td style="white-space:nowrap"><strong>' + esc(x.va) + '</strong> ' + (isLatest ? '<span class="chip accent">Latest</span>' : '<span class="chip">Older</span>') + '</td>' +
+              '<td class="num">' + fmt1(a) + '</td><td class="num">' + (low ? '<span class="flag">▲ ' + low + '</span>' : '0') + '</td>' +
+              '<td>' + (x.comments ? esc(x.comments.length > 80 ? x.comments.slice(0, 80) + '…' : x.comments) : '<span class="muted">–</span>') + '</td>' +
+              '<td style="white-space:nowrap"><button class="btn sm">' + (open ? 'Hide' : 'View') + '</button></td></tr>' +
+              (open ? '<tr><td colspan="6" style="background:var(--surface-2)"><div style="padding:6px 2px">' +
+                '<div class="chips" style="margin-bottom:10px">' + skills.map(s => { const v = x.ratings[s.name]; return '<span class="chip"' + (v != null ? '' : ' style="opacity:.6"') + '>' + esc(s.name) + ' <span class="r r' + (v || 3) + '" style="padding:0 6px;border-radius:4px;font-weight:600">' + (v ?? '–') + '</span></span>'; }).join('') + '</div>' +
+                (x.comments ? '<p style="margin:0 0 8px"><strong>Comments:</strong> ' + esc(x.comments) + '</p>' : '') +
+                '<a href="#" data-profile="' + esc(x.va) + '">Open ' + esc(x.va) + '’s profile →</a></div></td></tr>' : '');
+          }).join('') + '</tbody></table></div>'
+          : '<div class="empty">' + (all.length ? 'No submissions match your search.' : 'No submissions yet. Share the skills form with your VAs.') + '</div>') +
+        '<p class="hint">' + list.length + ' of ' + all.length + ' submission' + (all.length === 1 ? '' : 's') + '. Click a row to see every rating.</p>' +
+      '</div>';
+    const qi = $('#rsQ');
+    qi.oninput = () => { S.resp.q = qi.value; const pos = qi.selectionStart; render(); const n = $('#rsQ'); n.focus(); n.setSelectionRange(pos, pos); };
+    $('#rsLatest').onchange = e => { S.resp.latestOnly = e.target.checked; render(); };
+    el.querySelectorAll('.resp-row').forEach(r => (r.onclick = e => { if (e.target.closest('a')) return; const id = Number(r.dataset.open); S.resp.open = S.resp.open === id ? null : id; render(); }));
+    $('#rsCsv').onclick = () => {
+      const cell = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const head = ['Submitted', 'VA', 'Latest'].concat(skills.map(s => s.name), ['Average', 'Comments']);
+      const rows = list.map(x => [x.timestamp ? new Date(x.timestamp).toLocaleString() : '', x.va, latestKey[norm(x.va)] === x ? 'Y' : 'N']
+        .concat(skills.map(s => x.ratings[s.name] ?? ''), [fmt1(subAvg(x)), x.comments || '']));
+      const csv = [head].concat(rows).map(r => r.map(cell).join(',')).join('\r\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+      a.download = 'team-troy-responses.csv'; document.body.appendChild(a); a.click(); a.remove();
+    };
   }
 
   /* ---- Pairings ---- */
