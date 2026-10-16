@@ -234,3 +234,8 @@ tbody tr:hover { background: var(--surface-2); }
   .bar-row, .axis { grid-template-columns: 110px 1fr 36px; gap: 8px; }
   .tile .value { font-size: 26px; }
 }
+
+.pair-layout { grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); align-items: start; }
+@media (max-width: 900px) { .pair-layout { grid-template-columns: 1fr; } }
+.pair-layout td:first-child, .pair-layout td:nth-child(2) { white-space: nowrap; }
+.pair-layout .skill-picks { grid-template-columns: 1fr; }

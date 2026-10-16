@@ -319,7 +319,7 @@
 
     el.innerHTML =
       '<div class="view-head"><div><h2>Trainer pairing</h2><p class="muted">Assign each VA a trainer and the skills to work on.</p></div></div>' +
-      '<div class="grid two" style="align-items:start">' +
+      '<div class="grid pair-layout">' +
       '<form class="card form-grid" id="pairForm"><h3>' + (f.id ? 'Edit pairing' : 'New pairing') + '</h3>' +
         '<div class="field"><label for="fVA">VA to train</label><select id="fVA" required>' + M.people.map(n => '<option' + (n === f.va ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select></div>' +
         '<div class="field"><span class="label">Trainer</span><div class="seg" role="group" aria-label="Trainer type">' +

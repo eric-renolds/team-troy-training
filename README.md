@@ -29,3 +29,10 @@ The password is stored only in the private Apps Script project (`DASHBOARD_PASSW
 ## Changing the API URL
 
 Edit `config.js` → `API_URL`. Leave it empty to preview with demo data.
+
+## Skills form (already created)
+
+- **Share with VAs:** https://docs.google.com/forms/d/e/1FAIpQLSdYnMugPxZp6OBOhQMBi9aN1mRK4biAJCxQ4RVKYeOtIgA8Gg/viewform
+- **Edit:** https://docs.google.com/forms/d/11xX6Iyzrv9dj2-wcszLJ6WN2DPltQP57IHPyDH_Ingk/edit
+- After changing the `VAs` or `Skills` tabs, open the sheet → **Training Portal → Create / update skills form** to refresh the name list and skill grids.
+- The sample `Ratings` tab is used until the first real form response arrives; then the dashboard switches to `Form Responses 1`.

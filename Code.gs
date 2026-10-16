@@ -85,6 +85,78 @@ function getOrCreate_(ss, name, headers) {
   return sh;
 }
 
+/* ============================ GOOGLE FORM ============================ */
+
+const FORM_TITLE = 'Team Troy – VA Skills Self-Assessment';
+const SCALE = ['1 - Beginner', '2 - Basic', '3 - Competent', '4 - Strong', '5 - Expert'];
+
+/** Adds a "Training Portal" menu to the sheet. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Training Portal')
+    .addItem('Create / update skills form', 'syncSkillForm')
+    .addToUi();
+}
+
+/**
+ * Creates the skills form (first run) or updates it (later runs) from the
+ * VAs and Skills tabs. Run it again whenever you change VA names or skills.
+ * Responses go to this spreadsheet's "Form Responses" tab automatically.
+ */
+function syncSkillForm() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getScriptProperties();
+  let form = null;
+  const id = props.getProperty('FORM_ID');
+  if (id) { try { form = FormApp.openById(id); } catch (e) { form = null; } }
+  const created = !form;
+
+  if (!form) {
+    form = FormApp.create(FORM_TITLE);
+    props.setProperty('FORM_ID', form.getId());
+    form.setDescription(
+      'Rate yourself honestly on each skill. This is not a test: it helps us pair you with the right trainer.\n\n' +
+      '1 - Beginner: little or no experience\n2 - Basic: can do simple tasks with help\n' +
+      '3 - Competent: can do it on my own\n4 - Strong: confident, handle complex tasks\n5 - Expert: could teach others\n\n' +
+      'Takes about 3 minutes. You can submit again later; we use your latest answers.');
+    form.setConfirmationMessage('Thanks! Your skill ratings have been recorded.');
+    form.setAllowResponseEdits(false);
+    form.setProgressBar(true);
+    form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
+  }
+
+  const vaNames = getData_().vas.map(v => v.name);
+  const skills = rows_(TAB.SKILLS).filter(r => String(r[0]).trim())
+    .map(r => ({ name: String(r[0]).trim(), category: String(r[1] || 'Other').trim() }));
+  const byCat = {};
+  skills.forEach(s => (byCat[s.category] = byCat[s.category] || []).push(s.name));
+
+  // 1. Name dropdown (keeps names identical to the VAs tab)
+  let nameItem = form.getItems(FormApp.ItemType.LIST).find(i => i.getTitle() === 'Your Name');
+  nameItem = nameItem ? nameItem.asListItem() : form.addListItem().setTitle('Your Name');
+  nameItem.setRequired(true).setHelpText('Pick your name from the list.').setChoiceValues(vaNames);
+  if (created) form.moveItem(nameItem.getIndex(), 0);
+
+  // 2. One 1–5 grid per skill category
+  const grids = {};
+  form.getItems(FormApp.ItemType.GRID).forEach(i => (grids[i.getTitle()] = i.asGridItem()));
+  Object.keys(byCat).forEach(cat => {
+    const title = 'Rate your skills: ' + cat;
+    const g = grids[title] || form.addGridItem().setTitle(title);
+    g.setRows(byCat[cat]).setColumns(SCALE).setRequired(true);
+  });
+
+  // 3. Optional comments
+  const hasComments = form.getItems(FormApp.ItemType.PARAGRAPH_TEXT).some(i => i.getTitle() === 'Comments (optional)');
+  if (!hasComments) form.addParagraphTextItem().setTitle('Comments (optional)')
+    .setHelpText('A skill you want training on, or a tool we missed?');
+
+  const msg = (created ? 'Form created.' : 'Form updated.') +
+    '\nShare with VAs: ' + form.getPublishedUrl() + '\nEdit form: ' + form.getEditUrl();
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* run from editor: see log */ }
+  return msg;
+}
+
 /* ============================ API ============================ */
 
 function doGet() {
@@ -175,7 +247,7 @@ function readRatings_(skills) {
     if (skillByNorm[key]) { skillCols.push([i, skillByNorm[key]]); return; }
     if (tsCol < 0 && /timestamp/i.test(h)) { tsCol = i; return; }
     if (nameCol < 0 && /name/i.test(h)) { nameCol = i; return; }
-    if (!/e-?mail|score/i.test(h) && h.trim()) out.unmatchedColumns.push(m ? m[1] : h);
+    if (!/e-?mail|score|comment/i.test(h) && h.trim()) out.unmatchedColumns.push(m ? m[1] : h);
   });
   if (nameCol < 0) throw new Error('Ratings tab needs a column whose title contains "Name".');
 
