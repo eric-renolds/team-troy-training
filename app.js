@@ -167,7 +167,7 @@
     const b = $('#banner');
     const notes = [];
     if (DEMO) notes.push('<strong>Demo mode.</strong> No API URL set in <code>config.js</code>, so this is sample data. Changes are not saved.');
-    else if (S.data.ratingsSource === 'Ratings') notes.push('Showing the <strong>Ratings</strong> tab. Once your Google Form is linked to this sheet, its responses are used automatically.');
+    else if (S.data.ratingsSource === 'Ratings') notes.push('Showing <strong>sample data</strong> from the Ratings tab. As soon as the first VA submits the skills form, the dashboard switches to real responses and adds each submitter to the VA list.');
     if (S.data.unmatchedColumns && S.data.unmatchedColumns.length)
       notes.push('Form columns not matched to a skill (add them to the <strong>Skills</strong> tab to include them): ' + S.data.unmatchedColumns.map(esc).join(', '));
     if (M.outsiders.length) notes.push('Submissions from names not in the <strong>VAs</strong> tab: ' + M.outsiders.map(r => esc(r.va)).join(', '));
@@ -391,6 +391,6 @@
 
   const saved = store.get(PW_KEY, true);
   if (DEMO) { S.pw = 'demo'; showApp(); }
-  else if (saved) login(saved);
+  else if (saved) { S.pw = saved; showApp(); } // skip the extra login round-trip; load() logs out if the password changed
   else { $('#login').hidden = false; $('#pw').focus(); }
 })();
