@@ -670,6 +670,9 @@
 
   /* ================= global click handling ================= */
   document.addEventListener('click', async e => {
+    // Inside Google's frame links default to the top window, so route internal links ourselves.
+    const ln = e.target.closest('a[href^="#/"]');
+    if (ln && !ln.dataset.act) { e.preventDefault(); if (location.hash !== ln.getAttribute('href')) location.hash = ln.getAttribute('href'); else render(); return; }
     const el = e.target.closest('[data-act]'); if (!el) return;
     const a = el.dataset.act, arg = el.dataset.arg;
     if (el.tagName === 'A') e.preventDefault();
