@@ -1,5 +1,6 @@
 /**
- * Team Troy Training Portal — Google Apps Script API
+ * Team Troy Training Portal — VERSION 1 (legacy) API, kept so the old GitHub dashboard keeps working.
+ * The new app lives in Portal.gs.
  * ---------------------------------------------------
  * Paste this whole file into Extensions → Apps Script of the Team Troy sheet.
  * 1. Run setup() once (creates the tabs and placeholder data).
@@ -37,6 +38,7 @@ const STANDARD_SKILLS = [
 /* ============================ SETUP ============================ */
 
 function setup() {
+  requireOwnerOrAdmin_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   const vas = getOrCreate_(ss, TAB.VAS, ['VA Name', 'Email (optional)', 'Active (Y/N)']);
@@ -90,19 +92,13 @@ function getOrCreate_(ss, name, headers) {
 const FORM_TITLE = 'Team Troy – VA Skills Self-Assessment';
 const SCALE = ['1 - Beginner', '2 - Basic', '3 - Competent', '4 - Strong', '5 - Expert'];
 
-/** Adds a "Training Portal" menu to the sheet. */
-function onOpen() {
-  SpreadsheetApp.getUi().createMenu('Training Portal')
-    .addItem('Create / update skills form', 'syncSkillForm')
-    .addToUi();
-}
-
 /**
  * Creates the skills form (first run) or updates it (later runs) from the
  * VAs and Skills tabs. Run it again whenever you change VA names or skills.
  * Responses go to this spreadsheet's "Form Responses" tab automatically.
  */
 function syncSkillForm() {
+  requireOwnerOrAdmin_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const props = PropertiesService.getScriptProperties();
   let form = null;
@@ -160,10 +156,6 @@ function syncSkillForm() {
 }
 
 /* ============================ API ============================ */
-
-function doGet() {
-  return json_({ ok: true, message: 'Team Troy Training API is running. Use the dashboard to access data.' });
-}
 
 function doPost(e) {
   let req;
