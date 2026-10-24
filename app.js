@@ -94,7 +94,7 @@
   const STATUSES = ['Planned', 'In progress', 'Completed'];
   const STATUS_TONE = { Planned: 'tone-info', 'In progress': 'tone-accent', Completed: 'tone-good' };
   const STATUS_BAR = { Planned: 'var(--info)', 'In progress': 'var(--accent)', Completed: 'var(--good)' };
-  const ROLES = ['VA', 'Senior VA', 'Team Lead'];
+  const ROLES = ['VA', 'Senior VA', 'Team Lead', 'Account Executive'];
   const NOTE_TYPES = { Note: 'tone-info', Win: 'tone-good', Concern: 'tone-bad' };
   const STANDARD_SKILLS = [
     ['Email Management', 'Administrative'], ['Calendar & Scheduling', 'Administrative'], ['Data Entry & Accuracy', 'Administrative'],
