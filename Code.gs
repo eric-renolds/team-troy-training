@@ -110,6 +110,7 @@ function doPost(e) {
         case 'deleteTraining': deleteWhere_('training', 'ID', req.id); break;
         case 'saveNote': appendObj_('notes', noteRow_(req.note)); break;
         case 'deleteNote': deleteWhere_('notes', 'ID', req.id); break;
+        case 'deletePerson': deletePerson_(req.id); break;
         case 'saveSkills': saveSkills_(req.skills || []); break;
         case 'saveSettings': saveSettings_(req.settings || {}); break;
         default: return json_({ ok: false, error: 'Unknown action' });
@@ -171,6 +172,15 @@ function trainingRow_(t) {
 function noteRow_(n) {
   if (!n || !String(n.text || '').trim()) throw new Error('Note text is required');
   return { ID: n.id || id_('n'), 'Person ID': n.personId, Person: nameOf_(n.personId), Date: n.ts || new Date().toISOString(), Type: n.type || 'Note', Note: String(n.text).trim(), Manager: n.manager || '' };
+}
+
+function deletePerson_(id) {
+  if (!id) throw new Error('Missing VA');
+  deleteWhere_('team', 'ID', id);
+  deleteWhere_('ratings', 'Person ID', id);
+  deleteWhere_('notes', 'Person ID', id);
+  deleteWhere_('training', 'Trainee ID', id);
+  deleteWhere_('training', 'Trainer ID', id);
 }
 
 function saveSkills_(skills) {

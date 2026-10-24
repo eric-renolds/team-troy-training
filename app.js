@@ -542,7 +542,7 @@
       <section class="card" style="margin-bottom:20px">
         <div class="profile-head">${avatar(p, 'lg')}
           <div><h1>${esc(p.name)}</h1><div class="meta"><span>${esc(p.role)}</span><span>${esc(p.account || 'No account')}</span><span>Since ${fmt(p.start)}</span>${p.active === 'N' ? '<span class="pill tone-bad">Inactive</span>' : '<span class="pill tone-good">Active</span>'}</div></div>
-          <div class="actions"><button class="btn" data-act="edit-person" data-id="${esc(p.id)}">${ic('edit')}Edit</button><button class="btn" data-act="note" data-id="${esc(p.id)}">${ic('note')}Add note</button><button class="btn" data-act="assign" data-id="${esc(p.id)}">${ic('training')}Assign trainer</button><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate skills</button></div>
+          <div class="actions"><button class="btn btn-ghost btn-danger" data-act="remove-person" data-id="${esc(p.id)}">${ic('x')}Remove</button><button class="btn" data-act="edit-person" data-id="${esc(p.id)}">${ic('edit')}Edit</button><button class="btn" data-act="note" data-id="${esc(p.id)}">${ic('note')}Add note</button><button class="btn" data-act="assign" data-id="${esc(p.id)}">${ic('training')}Assign trainer</button><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate skills</button></div>
         </div>
         <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-act="go" data-id="#/va/${esc(p.id)}/${k}">${l}</button>`).join('')}</div>
       </section>${content}`;
@@ -858,6 +858,7 @@
     const p = pid ? person(pid) : null;
     modal({
       title: p ? 'Edit VA' : 'Add VA', submit: p ? 'Save' : 'Add VA',
+      danger: p ? { label: 'Remove VA', confirm: `Remove ${p.name} from the team?\n\nThis deletes their ratings, notes and trainings for good. To keep their history, set Status to Inactive instead.`, run: () => removePerson(p.id) } : null,
       body: `<label class="field"><span>Full name</span><input class="input" name="name" required value="${esc(p ? p.name : '')}" autocomplete="off"></label>
         <div class="row2"><label class="field"><span>Role</span><select class="select" name="role">${ROLES.map((r) => `<option ${(p ? p.role : 'VA') === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
           <label class="field"><span>Client / account</span><input class="input" name="account" value="${esc(p ? p.account : '')}"></label></div>
@@ -871,6 +872,19 @@
         if (!p) { render.keepScroll = false; location.hash = '#/va/' + rec.id; }
       },
     });
+  }
+
+  function removePerson(id) {
+    const p = person(id);
+    if (!p) return;
+    render.keepScroll = false;
+    if (location.hash.indexOf('#/va/' + id) === 0) location.hash = '#/team';
+    save('deletePerson', { id }, () => {
+      DB.people = DB.people.filter((x) => x.id !== id);
+      DB.ratings = DB.ratings.filter((r) => r.personId !== id);
+      DB.notes = DB.notes.filter((n) => n.personId !== id);
+      DB.training = DB.training.filter((t) => t.traineeId !== id && t.trainerId !== id);
+    }, p.name + ' removed from the team');
   }
 
   function skillDialog(i) {
@@ -979,6 +993,7 @@
       case 'note': return noteDialog(id);
       case 'del-note': if (confirm('Delete this note?')) save('deleteNote', { id }, () => { DB.notes = DB.notes.filter((n) => n.id !== id); }, 'Note deleted'); return;
       case 'edit-person': return personDialog(id);
+      case 'remove-person': { const p = person(id); if (p && confirm(`Remove ${p.name} from the team?\n\nThis deletes their ratings, notes and trainings for good. To keep their history, edit them and set Status to Inactive instead.`)) removePerson(id); return; }
       case 'add-person': return personDialog();
       case 'add-skill': return skillDialog();
       case 'edit-skill': return skillDialog(Number(id));
