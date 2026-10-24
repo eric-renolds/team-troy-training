@@ -1,328 +1,254 @@
 /**
- * Team Troy Training Portal — VERSION 1 (legacy) API, kept so the old GitHub dashboard keeps working.
- * The new app lives in Portal.gs.
- * ---------------------------------------------------
- * Paste this whole file into Extensions → Apps Script of the Team Troy sheet.
- * 1. Run setup() once (creates the tabs and placeholder data).
- * 2. Deploy → New deployment → Web app → Execute as: Me, Who has access: Anyone.
- * 3. Put the Web app URL into config.js on GitHub.
+ * Team Troy Training Portal — Google Apps Script API (manager edition)
+ * ---------------------------------------------------------------------
+ * The website (GitHub Pages) talks to this script; this script reads and writes the Google Sheet.
  *
- * The password lives ONLY here (this script is private to your Google account).
- * Change it any time, then Deploy → Manage deployments → Edit → New version.
+ * ONE-TIME SETUP
+ * 1. Create a new Apps Script project (script.google.com → New project) or open the sheet's own script.
+ * 2. Paste this file into Code.gs and check SHEET_ID below, then save.
+ * 3. Change MANAGER_PASSWORD below, then run setup() once (Run ▶). Approve the permissions.
+ *    It creates the tabs, adds the standard skills and copies VA names from the old portal tabs.
+ * 4. Deploy → New deployment → type: Web app → Execute as: Me → Who has access: Anyone → Deploy.
+ *    (If you already have a deployment: Deploy → Manage deployments → Edit → Version: New version → Deploy.)
+ * 5. Copy the Web app URL (ends in /exec) into config.js on GitHub → API_URL.
+ *
+ * The password lives only here, never in the public GitHub repo.
  */
-const DASHBOARD_PASSWORD = 'CHANGE-ME'; // set your real password in your own Apps Script copy only
+const MANAGER_PASSWORD = 'CHANGE-ME';
 
-const TAB = { VAS: 'VAs', SKILLS: 'Skills', PAIRINGS: 'Pairings', RATINGS: 'Ratings' };
-const PAIRING_HEADERS = ['ID', 'VA Name', 'Trainer Name', 'Trainer Type', 'Target Skills', 'Date Assigned'];
+// The "Team Troy Training Portal" Google Sheet (the long ID in its URL).
+const SHEET_ID = '1IGhyXRyjX0BneNg94zqsoXRkriQJb2adwQIDbWqaSHQ';
+function ss_() { return SpreadsheetApp.openById(SHEET_ID); }
+
+const TABS = {
+  team: { name: 'VA Team', headers: ['ID', 'Name', 'Role', 'Account', 'Start', 'Active'] },
+  skills: { name: 'Skill List', headers: ['Skill', 'Category', 'Active'] },
+  ratings: { name: 'Skill Ratings', headers: ['Timestamp', 'Person ID', 'Person', 'Skill', 'Score', 'Manager', 'Note'] },
+  training: { name: 'Trainings', headers: ['ID', 'Trainee ID', 'Trainee', 'Trainer ID', 'Trainer', 'Skills', 'Target', 'Start', 'Due', 'Status', 'Notes', 'Created', 'Updated'] },
+  notes: { name: 'Work Notes', headers: ['ID', 'Person ID', 'Person', 'Date', 'Type', 'Note', 'Manager'] },
+  settings: { name: 'Portal Settings', headers: ['Key', 'Value'] },
+};
 
 const STANDARD_SKILLS = [
-  ['Email Management', 'Administrative'],
-  ['Calendar & Scheduling', 'Administrative'],
-  ['Data Entry & Accuracy', 'Administrative'],
-  ['Microsoft Excel', 'Tools'],
-  ['Google Workspace', 'Tools'],
-  ['CRM Tools', 'Tools'],
-  ['Project Management Tools', 'Tools'],
-  ['Written Communication', 'Communication'],
-  ['Verbal Communication', 'Communication'],
-  ['Customer Service', 'Communication'],
-  ['Internet Research', 'Research & Analysis'],
-  ['Problem Solving', 'Research & Analysis'],
-  ['Time Management', 'Professional'],
-  ['Attention to Detail', 'Professional'],
-  ['Social Media Management', 'Marketing'],
-  ['Canva / Basic Design', 'Marketing'],
-  ['Basic Bookkeeping', 'Finance'],
+  ['Email Management', 'Administrative'], ['Calendar & Scheduling', 'Administrative'], ['Data Entry & Accuracy', 'Administrative'],
+  ['Microsoft Excel', 'Tools'], ['Google Workspace', 'Tools'], ['CRM Tools', 'Tools'], ['Project Management Tools', 'Tools'],
+  ['Written Communication', 'Communication'], ['Verbal Communication', 'Communication'], ['Customer Service', 'Communication'],
+  ['Internet Research', 'Research & Analysis'], ['Problem Solving', 'Research & Analysis'],
+  ['Time Management', 'Professional'], ['Attention to Detail', 'Professional'],
+  ['Social Media Management', 'Marketing'], ['Canva / Basic Design', 'Marketing'], ['Basic Bookkeeping', 'Finance'],
 ];
 
-/* ============================ SETUP ============================ */
+/* ============================== setup ============================== */
 
 function setup() {
-  requireOwnerOrAdmin_();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Object.keys(TABS).forEach((k) => sheet_(k));
+  const ss = ss_();
 
-  const vas = getOrCreate_(ss, TAB.VAS, ['VA Name', 'Email (optional)', 'Active (Y/N)']);
-  if (vas.getLastRow() < 2) {
-    const rows = [];
-    for (let i = 1; i <= 16; i++) rows.push(['VA ' + String(i).padStart(2, '0'), '', 'Y']);
-    vas.getRange(2, 1, rows.length, 3).setValues(rows);
-  }
-
-  const skills = getOrCreate_(ss, TAB.SKILLS, ['Skill Name', 'Category', 'Source (Standard/Custom)']);
-  if (skills.getLastRow() < 2) {
-    const rows = STANDARD_SKILLS.map(s => [s[0], s[1], 'Standard']);
-    skills.getRange(2, 1, rows.length, 3).setValues(rows);
-  }
-
-  getOrCreate_(ss, TAB.PAIRINGS, PAIRING_HEADERS);
-
-  // Demo ratings so the dashboard has something to show. Once a Google Form is
-  // linked (its "Form Responses" tab exists), the dashboard ignores this tab.
-  const skillNames = STANDARD_SKILLS.map(s => s[0]);
-  const ratings = getOrCreate_(ss, TAB.RATINGS, ['Timestamp', 'VA Name'].concat(skillNames));
-  if (ratings.getLastRow() < 2) {
-    const rows = [];
-    const now = new Date();
-    for (let i = 1; i <= 12; i++) {
-      const row = [new Date(now.getTime() - i * 86400000), 'VA ' + String(i).padStart(2, '0')];
-      skillNames.forEach((_, j) => row.push(1 + ((i * 7 + j * 3 + (i * j) % 4) % 5)));
-      rows.push(row);
+  // Skills: copy from the old v2 "Skills" tab if it exists, otherwise use the standard list.
+  if (sheet_('skills').getLastRow() < 2) {
+    let rows = [];
+    const old = ss.getSheetByName('Skills');
+    if (old && old.getLastRow() > 1) {
+      rows = old.getRange(2, 1, old.getLastRow() - 1, 2).getValues().filter((r) => String(r[0]).trim()).map((r) => [String(r[0]).trim(), String(r[1] || 'Other').trim(), 'Y']);
     }
-    ratings.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+    if (!rows.length) rows = STANDARD_SKILLS.map((s) => [s[0], s[1], 'Y']);
+    sheet_('skills').getRange(2, 1, rows.length, 3).setValues(rows);
   }
 
-  const first = ss.getSheetByName('Sheet1');
-  if (first && ss.getSheets().length > 1 && first.getLastRow() === 0) ss.deleteSheet(first);
-  SpreadsheetApp.flush();
-  return 'Setup complete';
+  // VA names: copy from the old portal tabs (v2 "People", v1 "VAs"), skipping placeholders and sample rows.
+  if (sheet_('team').getLastRow() < 2) {
+    const seen = {}, rows = [];
+    const add = (name, role, active) => {
+      const n = String(name || '').trim().replace(/\s+/g, ' ');
+      const k = n.toLowerCase();
+      if (!n || seen[k] || /^va \d{2}$/.test(k) || /^sample/.test(k)) return;
+      seen[k] = 1;
+      rows.push([id_('p'), n, role || 'VA', '', '', active === 'N' ? 'N' : 'Y']);
+    };
+    const people = ss.getSheetByName('People');
+    if (people && people.getLastRow() > 1) {
+      const v = people.getDataRange().getValues(), h = v.shift();
+      const ix = (c) => h.indexOf(c);
+      v.forEach((r) => { if (String(r[ix('Sample')] || '') !== 'Y') add(r[ix('Name')], 'VA', String(r[ix('Active')] || 'Y').toUpperCase().charAt(0)); });
+    }
+    const vas = ss.getSheetByName('VAs');
+    if (vas && vas.getLastRow() > 1) vas.getRange(2, 1, vas.getLastRow() - 1, 1).getValues().forEach((r) => add(r[0]));
+    if (rows.length) sheet_('team').getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+
+  const st = readSettings_();
+  if (!st.teamName) setSetting_('teamName', 'Team Troy');
+  if (!st.reassessDays) setSetting_('reassessDays', '45');
+  if (!st.managers) setSetting_('managers', '');
+  safeAlert_('Team Troy portal is set up. Now deploy it as a web app (see the notes at the top of Code.gs).');
 }
 
-function getOrCreate_(ss, name, headers) {
-  let sh = ss.getSheetByName(name);
-  if (!sh) sh = ss.insertSheet(name);
-  if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+function safeAlert_(msg) { try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); } }
+
+/* ============================== web app ============================== */
+
+function doGet() {
+  return json_({ ok: true, app: 'Team Troy Training Portal API', hint: 'Open the portal website to use it.' });
+}
+
+function doPost(e) {
+  let req;
+  try { req = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: 'Bad request' }); }
+  if (!req || String(req.password) !== MANAGER_PASSWORD) {
+    Utilities.sleep(700);
+    return json_({ ok: false, error: 'Incorrect password' });
+  }
+  try {
+    if (req.action === 'getAll') return json_({ ok: true, data: getAll_() });
+    const lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+    try {
+      switch (req.action) {
+        case 'savePerson': upsert_('team', 'ID', personRow_(req.person)); break;
+        case 'saveRatings': saveRatings_(req.rows || [], req.note); break;
+        case 'saveTraining': upsert_('training', 'ID', trainingRow_(req.training)); break;
+        case 'deleteTraining': deleteWhere_('training', 'ID', req.id); break;
+        case 'saveNote': appendObj_('notes', noteRow_(req.note)); break;
+        case 'deleteNote': deleteWhere_('notes', 'ID', req.id); break;
+        case 'saveSkills': saveSkills_(req.skills || []); break;
+        case 'saveSettings': saveSettings_(req.settings || {}); break;
+        default: return json_({ ok: false, error: 'Unknown action' });
+      }
+    } finally { lock.releaseLock(); }
+    return json_({ ok: true });
+  } catch (err) {
+    return json_({ ok: false, error: String((err && err.message) || err) });
+  }
+}
+
+function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+
+/* ============================== read ============================== */
+
+function getAll_() {
+  const team = read_('team'), byId = {};
+  team.forEach((p) => (byId[p.ID] = p));
+  return {
+    people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
+    skills: read_('skills').map((s) => ({ name: s.Skill, category: s.Category || 'Other', active: String(s.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
+    ratings: read_('ratings').map((r) => ({ ts: r.Timestamp, personId: r['Person ID'], skill: r.Skill, score: Number(r.Score), manager: r.Manager, note: r.Note })),
+    training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 4, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
+    notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
+    settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: String(s.managers || '').split(/\s*[,;\n]\s*/).filter(String) }; })(),
+  };
+}
+
+/* ============================== write ============================== */
+
+function nameOf_(id) { const p = read_('team').find((r) => r.ID === id); return p ? p.Name : ''; }
+
+function personRow_(p) {
+  if (!p || !String(p.name || '').trim()) throw new Error('Name is required');
+  return { ID: p.id || id_('p'), Name: String(p.name).trim(), Role: p.role || 'VA', Account: p.account || '', Start: p.start || '', Active: p.active === 'N' ? 'N' : 'Y' };
+}
+
+function saveRatings_(rows, note) {
+  const team = {}; read_('team').forEach((p) => (team[p.ID] = p.Name));
+  const out = rows.filter((r) => team[r.personId] && Number(r.score) >= 1 && Number(r.score) <= 5)
+    .map((r) => [r.ts || new Date().toISOString(), r.personId, team[r.personId], r.skill, Number(r.score), r.manager || '', r.note || '']);
+  if (!out.length) return;
+  const sh = sheet_('ratings');
+  sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+  if (note && note.text) appendObj_('notes', noteRow_(note));
+}
+
+function trainingRow_(t) {
+  if (!t || !t.traineeId || !t.trainerId) throw new Error('Trainee and trainer are required');
+  if (t.traineeId === t.trainerId) throw new Error('A VA cannot train themselves');
+  const now = new Date().toISOString();
+  return {
+    ID: t.id || id_('t'), 'Trainee ID': t.traineeId, Trainee: nameOf_(t.traineeId), 'Trainer ID': t.trainerId, Trainer: nameOf_(t.trainerId),
+    Skills: (t.skills || []).join('; '), Target: Number(t.target) || 4, Start: t.start || '', Due: t.due || '', Status: t.status || 'Planned',
+    Notes: t.notes || '', Created: t.created || now, Updated: now,
+  };
+}
+
+function noteRow_(n) {
+  if (!n || !String(n.text || '').trim()) throw new Error('Note text is required');
+  return { ID: n.id || id_('n'), 'Person ID': n.personId, Person: nameOf_(n.personId), Date: n.ts || new Date().toISOString(), Type: n.type || 'Note', Note: String(n.text).trim(), Manager: n.manager || '' };
+}
+
+function saveSkills_(skills) {
+  const sh = sheet_('skills');
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent();
+  const rows = skills.filter((s) => String(s.name || '').trim()).map((s) => [String(s.name).trim(), String(s.category || 'Other').trim(), s.active === 'N' ? 'N' : 'Y']);
+  if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
+}
+
+function saveSettings_(s) {
+  if (s.teamName != null) setSetting_('teamName', String(s.teamName));
+  if (s.reassessDays != null) setSetting_('reassessDays', String(Number(s.reassessDays) || 45));
+  if (s.managers != null) setSetting_('managers', (s.managers || []).slice(0, 10).join(', '));
+}
+
+/* ============================== sheet helpers ============================== */
+
+function sheet_(key) {
+  const t = TABS[key], ss = ss_();
+  let sh = ss.getSheetByName(t.name);
+  if (!sh) {
+    sh = ss.insertSheet(t.name);
+    sh.getRange(1, 1, 1, t.headers.length).setValues([t.headers]).setFontWeight('bold').setBackground('#14213D').setFontColor('#F3E2C0');
     sh.setFrozenRows(1);
+    sh.getRange(1, 1, sh.getMaxRows(), t.headers.length).setNumberFormat('@'); // keep dates as plain text
   }
   return sh;
 }
 
-/* ============================ GOOGLE FORM ============================ */
-
-const FORM_TITLE = 'Team Troy – VA Skills Self-Assessment';
-const SCALE = ['1 - Beginner', '2 - Basic', '3 - Competent', '4 - Strong', '5 - Expert'];
-
-/**
- * Creates the skills form (first run) or updates it (later runs) from the
- * VAs and Skills tabs. Run it again whenever you change VA names or skills.
- * Responses go to this spreadsheet's "Form Responses" tab automatically.
- */
-function syncSkillForm() {
-  requireOwnerOrAdmin_();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const props = PropertiesService.getScriptProperties();
-  let form = null;
-  const id = props.getProperty('FORM_ID');
-  if (id) { try { form = FormApp.openById(id); } catch (e) { form = null; } }
-  const created = !form;
-
-  if (!form) {
-    form = FormApp.create(FORM_TITLE);
-    props.setProperty('FORM_ID', form.getId());
-    form.setDescription(
-      'Rate yourself honestly on each skill. This is not a test: it helps us pair you with the right trainer.\n\n' +
-      '1 - Beginner: little or no experience\n2 - Basic: can do simple tasks with help\n' +
-      '3 - Competent: can do it on my own\n4 - Strong: confident, handle complex tasks\n5 - Expert: could teach others\n\n' +
-      'Takes about 3 minutes. You can submit again later; we use your latest answers.');
-    form.setConfirmationMessage('Thanks! Your skill ratings have been recorded.');
-    form.setAllowResponseEdits(false);
-    form.setProgressBar(true);
-    form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
-  }
-
-  const skills = rows_(TAB.SKILLS).filter(r => String(r[0]).trim())
-    .map(r => ({ name: String(r[0]).trim(), category: String(r[1] || 'Other').trim() }));
-  const byCat = {};
-  skills.forEach(s => (byCat[s.category] = byCat[s.category] || []).push(s.name));
-
-  // 1. Name: free-text box (an older dropdown version is replaced)
-  form.getItems(FormApp.ItemType.LIST).filter(i => i.getTitle() === 'Your Name').forEach(i => form.deleteItem(i));
-  const found = form.getItems(FormApp.ItemType.TEXT).find(i => i.getTitle() === 'Your Name');
-  let nameItem;
-  if (found) nameItem = found.asTextItem();
-  else { nameItem = form.addTextItem().setTitle('Your Name'); form.moveItem(nameItem.getIndex(), 0); }
-  nameItem.setRequired(true)
-    .setHelpText('Enter your full name (first and last). Please spell it the same way every time you fill this in.');
-
-  // 2. One 1–5 grid per skill category
-  const grids = {};
-  form.getItems(FormApp.ItemType.GRID).forEach(i => (grids[i.getTitle()] = i.asGridItem()));
-  Object.keys(byCat).forEach(cat => {
-    const title = 'Rate your skills: ' + cat;
-    const g = grids[title] || form.addGridItem().setTitle(title);
-    g.setRows(byCat[cat]).setColumns(SCALE).setRequired(true);
+function read_(key) {
+  const sh = sheet_(key);
+  if (sh.getLastRow() < 2) return [];
+  const v = sh.getDataRange().getValues(), h = v.shift().map(String);
+  return v.filter((r) => r.some((c) => c !== '')).map((r) => {
+    const o = {};
+    h.forEach((k, i) => { const c = r[i]; o[k] = c instanceof Date ? c.toISOString() : c === '' || c == null ? '' : typeof c === 'number' ? c : String(c); });
+    return o;
   });
-
-  // 3. Optional comments
-  const hasComments = form.getItems(FormApp.ItemType.PARAGRAPH_TEXT).some(i => i.getTitle() === 'Comments (optional)');
-  if (!hasComments) form.addParagraphTextItem().setTitle('Comments (optional)')
-    .setHelpText('A skill you want training on, or a tool we missed?');
-
-  const msg = (created ? 'Form created.' : 'Form updated.') +
-    '\nShare with VAs: ' + form.getPublishedUrl() + '\nEdit form: ' + form.getEditUrl();
-  Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* run from editor: see log */ }
-  return msg;
 }
 
-/* ============================ API ============================ */
+function appendObj_(key, obj) {
+  const sh = sheet_(key), h = TABS[key].headers;
+  sh.appendRow(h.map((k) => (obj[k] == null ? '' : obj[k])));
+}
 
-function doPost(e) {
-  let req;
-  try {
-    req = JSON.parse(e.postData.contents);
-  } catch (err) {
-    return json_({ ok: false, error: 'Bad request' });
+function upsert_(key, idCol, obj) {
+  const sh = sheet_(key), h = TABS[key].headers, col = h.indexOf(idCol);
+  const row = h.map((k) => (obj[k] == null ? '' : obj[k]));
+  const last = sh.getLastRow();
+  if (last > 1) {
+    const ids = sh.getRange(2, col + 1, last - 1, 1).getValues().map((r) => String(r[0]));
+    const i = ids.indexOf(String(obj[idCol]));
+    if (i >= 0) { sh.getRange(i + 2, 1, 1, h.length).setValues([row]); return; }
   }
-  if (!req || req.password !== DASHBOARD_PASSWORD) {
-    Utilities.sleep(800); // slows down password guessing
-    return json_({ ok: false, error: 'Incorrect password' });
+  sh.appendRow(row);
+}
+
+function deleteWhere_(key, idCol, id) {
+  const sh = sheet_(key), col = TABS[key].headers.indexOf(idCol), last = sh.getLastRow();
+  if (last < 2) return;
+  const ids = sh.getRange(2, col + 1, last - 1, 1).getValues();
+  for (let i = ids.length - 1; i >= 0; i--) if (String(ids[i][0]) === String(id)) sh.deleteRow(i + 2);
+}
+
+function readSettings_() {
+  const o = {};
+  read_('settings').forEach((r) => { o[r.Key] = r.Value; });
+  return o;
+}
+
+function setSetting_(k, v) {
+  const sh = sheet_('settings'), last = sh.getLastRow();
+  if (last > 1) {
+    const keys = sh.getRange(2, 1, last - 1, 1).getValues().map((r) => String(r[0]));
+    const i = keys.indexOf(k);
+    if (i >= 0) { sh.getRange(i + 2, 2).setValue(v); return; }
   }
-  try {
-    switch (req.action) {
-      case 'login': return json_({ ok: true });
-      case 'getData': return json_({ ok: true, data: getData_() });
-      case 'savePairing': return json_({ ok: true, pairing: savePairing_(req.pairing) });
-      case 'deletePairing': deletePairing_(req.id); return json_({ ok: true });
-      default: return json_({ ok: false, error: 'Unknown action' });
-    }
-  } catch (err) {
-    return json_({ ok: false, error: String(err && err.message || err) });
-  }
+  sh.appendRow([k, v]);
 }
 
-function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-
-/* ============================ READ ============================ */
-
-function rows_(name) {
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-  if (!sh || sh.getLastRow() < 2) return [];
-  return sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-}
-
-const norm_ = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-
-const PLACEHOLDER_VA_ = /^VA \d{2}$/;
-
-function getData_() {
-  const skills = rows_(TAB.SKILLS)
-    .filter(r => String(r[0]).trim())
-    .map(r => ({ name: String(r[0]).trim(), category: String(r[1] || 'Other').trim(), source: String(r[2] || 'Standard').trim() }));
-
-  // Ratings first: with real form data, anyone who submits joins the VA list.
-  const ratingsInfo = readRatings_(skills);
-  const fromForm = /^form responses/i.test(ratingsInfo.ratingsSource || '');
-  if (fromForm) addMissingVAs_(ratingsInfo.ratings.map(r => r.va));
-
-  let vas = rows_(TAB.VAS)
-    .filter(r => String(r[0]).trim() && String(r[2] || 'Y').trim().toUpperCase() !== 'N')
-    .map(r => ({ name: String(r[0]).trim() }));
-  if (fromForm) vas = vas.filter(v => !PLACEHOLDER_VA_.test(v.name)); // drop "VA 01…16" once real data exists
-
-  const pairings = rows_(TAB.PAIRINGS)
-    .filter(r => String(r[0]).trim())
-    .map(r => ({
-      id: String(r[0]), va: String(r[1]), trainer: String(r[2]), trainerType: String(r[3] || 'VA'),
-      skills: String(r[4] || '').split(',').map(s => s.trim()).filter(Boolean),
-      date: r[5] instanceof Date ? r[5].toISOString() : String(r[5] || ''),
-    }));
-
-  return Object.assign({ vas, skills, pairings, generatedAt: new Date().toISOString() }, ratingsInfo);
-}
-
-/** Appends submitters who aren't in the VAs tab yet (matching ignores case and extra spaces). */
-function addMissingVAs_(names) {
-  const sh = getOrCreate_(SpreadsheetApp.getActiveSpreadsheet(), TAB.VAS, ['VA Name', 'Email (optional)', 'Active (Y/N)']);
-  const known = new Set(rows_(TAB.VAS).map(r => norm_(r[0])));
-  const add = [];
-  names.forEach(n => { const k = norm_(n); if (k && !known.has(k)) { known.add(k); add.push([String(n).trim().replace(/\s+/g, ' '), '', 'Y']); } });
-  if (!add.length) return;
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try { sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add); } finally { lock.releaseLock(); }
-}
-
-/** Finds the ratings tab: a linked Google Form response tab first, else "Ratings". */
-function ratingsSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const form = ss.getSheets().find(s => /^form responses/i.test(s.getName()) && s.getLastRow() > 1);
-  return form || ss.getSheetByName(TAB.RATINGS);
-}
-
-function readRatings_(skills) {
-  const sh = ratingsSheet_();
-  const out = { ratings: [], submissions: [], ratingsSource: sh ? sh.getName() : null, unmatchedColumns: [] };
-  if (!sh || sh.getLastRow() < 2) return out;
-
-  const values = sh.getDataRange().getValues();
-  const headers = values[0].map(h => String(h));
-  const skillByNorm = {};
-  skills.forEach(s => (skillByNorm[norm_(s.name)] = s.name));
-
-  let tsCol = -1, nameCol = -1, commentCol = -1;
-  const skillCols = []; // [colIndex, skillName]
-  headers.forEach((h, i) => {
-    // Google Form grid questions look like "Rate your skills [Microsoft Excel]"
-    const m = h.match(/\[([^\]]+)\]\s*$/);
-    const key = norm_(m ? m[1] : h);
-    if (skillByNorm[key]) { skillCols.push([i, skillByNorm[key]]); return; }
-    if (tsCol < 0 && /timestamp/i.test(h)) { tsCol = i; return; }
-    if (nameCol < 0 && /name/i.test(h)) { nameCol = i; return; }
-    if (commentCol < 0 && /comment/i.test(h)) { commentCol = i; return; }
-    if (!/e-?mail|score|comment/i.test(h) && h.trim()) out.unmatchedColumns.push(m ? m[1] : h);
-  });
-  if (nameCol < 0) throw new Error('Ratings tab needs a column whose title contains "Name".');
-
-  const latest = {}; // VA (normalised) -> submission, latest wins
-  values.slice(1).forEach(r => {
-    const name = String(r[nameCol] || '').trim();
-    if (!name) return;
-    const ts = tsCol >= 0 && r[tsCol] instanceof Date ? r[tsCol] : null;
-    const ratings = {};
-    skillCols.forEach(([c, skill]) => {
-      const n = String(r[c]).match(/[1-5]/);
-      if (n) ratings[skill] = Number(n[0]);
-    });
-    const comments = commentCol >= 0 ? String(r[commentCol] || '').trim() : '';
-    out.submissions.push({ va: name, timestamp: ts ? ts.toISOString() : null, ratings, comments });
-    const key = norm_(name);
-    const prev = latest[key];
-    if (!prev || !ts || !prev.ts || ts >= prev.ts) latest[key] = { name, ts, ratings, comments };
-  });
-  out.submissions.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
-
-  out.ratings = Object.values(latest).map(x => ({ va: x.name, timestamp: x.ts ? x.ts.toISOString() : null, ratings: x.ratings, comments: x.comments }));
-  return out;
-}
-
-/* ============================ WRITE ============================ */
-
-function savePairing_(p) {
-  if (!p || !String(p.va || '').trim() || !String(p.trainer || '').trim()) throw new Error('VA and trainer are required.');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    const sh = getOrCreate_(SpreadsheetApp.getActiveSpreadsheet(), TAB.PAIRINGS, PAIRING_HEADERS);
-    const skills = (p.skills || []).map(s => String(s).trim()).filter(Boolean).join(', ');
-    const type = p.trainerType === 'External' ? 'External' : 'VA';
-    const ids = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
-    const idx = p.id ? ids.indexOf(String(p.id)) : -1;
-    if (idx >= 0) {
-      const row = idx + 2;
-      sh.getRange(row, 2, 1, 4).setValues([[p.va.trim(), p.trainer.trim(), type, skills]]);
-      return { id: p.id };
-    }
-    const id = Utilities.getUuid().slice(0, 8);
-    sh.appendRow([id, p.va.trim(), p.trainer.trim(), type, skills, new Date()]);
-    return { id };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function deletePairing_(id) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TAB.PAIRINGS);
-    if (!sh || sh.getLastRow() < 2) return;
-    const ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
-    const idx = ids.indexOf(String(id));
-    if (idx >= 0) sh.deleteRow(idx + 2);
-  } finally {
-    lock.releaseLock();
-  }
-}
+function id_(prefix) { return prefix + Utilities.getUuid().replace(/-/g, '').slice(0, 10); }
