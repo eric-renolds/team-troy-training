@@ -1,7 +1,7 @@
-// Team Troy Training Portal — the only line you need to edit.
-// Paste your Google Apps Script Web App URL between the quotes.
-// Leave it empty to preview the dashboard with demo data.
+// Team Troy Training Portal — settings.
+// API_URL: your Google Apps Script web app URL (ends in /exec).
+// Leave it empty to explore the portal with sample data.
 window.TT_CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbwuhc9stk08BbFuZn9IUe1D1Ky8v4S6dra7Ue1QVhBSUu2JtXnxfAd_XV4CDufAMG0/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwWvf4IbG_V0648bkvPb4QlRxRelKpQbfSWhU43nqm2mYIPT4S7A-u6kvHZwfxON5Hl/exec',
   TEAM_NAME: 'Team Troy',
 };
