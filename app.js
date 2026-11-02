@@ -96,14 +96,20 @@
   const STATUS_BAR = { Planned: 'var(--info)', 'In progress': 'var(--accent)', Completed: 'var(--good)' };
   const ROLES = ['VA', 'Senior VA', 'Team Lead', 'Account Executive'];
   const NOTE_TYPES = { Note: 'tone-info', Win: 'tone-good', Concern: 'tone-bad' };
-  const STANDARD_SKILLS = [
-    ['Email Management', 'Administrative'], ['Calendar & Scheduling', 'Administrative'], ['Data Entry & Accuracy', 'Administrative'],
-    ['Microsoft Excel', 'Tools'], ['Google Workspace', 'Tools'], ['CRM Tools', 'Tools'], ['Project Management Tools', 'Tools'],
-    ['Written Communication', 'Communication'], ['Verbal Communication', 'Communication'], ['Customer Service', 'Communication'],
-    ['Internet Research', 'Research & Analysis'], ['Problem Solving', 'Research & Analysis'],
-    ['Time Management', 'Professional'], ['Attention to Detail', 'Professional'],
-    ['Social Media Management', 'Marketing'], ['Canva / Basic Design', 'Marketing'], ['Basic Bookkeeping', 'Finance'],
-  ];
+  const OTHER_CAT = 'Other tools';
+  const SKILL_CATALOG = {
+    'Administrative': ['Email Management', 'Calendar & Scheduling', 'Data Entry & Accuracy', 'Records & File Management', 'Listing Management', 'CMA & Market Analysis', 'Weekly Reporting', 'Open House Coordination', 'Transcription'],
+    'Tools': ['Microsoft Excel', 'Google Workspace', 'CRM Tools', 'Real Estate CRMs (kvCORE, Follow Up Boss, Lofty, CINC, KW Command)', 'CRM Automations & Drip Campaigns', 'Project Management Tools'],
+    'Communication': ['Written Communication', 'Verbal Communication', 'Customer Service'],
+    'Research & Analysis': ['Internet Research', 'Problem Solving'],
+    'Professional': ['Time Management', 'Attention to Detail'],
+    'Marketing & Social Media': ['Social Media Management', 'Content Calendar Planning', 'Social Media Engagement & Community', 'Paid Ads (Google & Meta)', 'Audience Research & Retargeting', 'SEO & Keyword Research', 'Web Analytics & Reporting', 'Google Business Profile', 'Email Marketing & Newsletters', 'Landing Pages & Lead Capture Forms', 'Post Scheduling (Meta Business Suite)', 'Online Reviews & Reputation', 'Contests & Promotions'],
+    'Content Creation': ['Graphic Design (Canva / Photoshop / Illustrator)', 'Brand Kits & Brand Consistency', 'Video Editing', 'Real Estate Content Writing', 'Scripts & Podcasts', 'Property Videos & Virtual Tours'],
+    'Lead Generation': ['Lead Generation Strategy', 'Cold Calling', 'Lead Qualification & Nurturing', 'FSBO & Expired Listings', 'Distressed Property Prospecting', 'Prospect Research & Data Mining', 'SMS Campaigns', 'Direct Mail Campaigns', 'Referral & Partner Outreach'],
+    'Transaction Coordination': ['Contract-to-Close Coordination', 'Contract & Disclosure Prep', 'Transaction Software (Dotloop, SkySlope, DocuSign)', 'Deadline Tracking', 'Compliance & Fair Housing', 'Title, Escrow & Lender Coordination'],
+    'Finance': ['Basic Bookkeeping'],
+  };
+  const STANDARD_SKILLS = Object.entries(SKILL_CATALOG).flatMap(([cat, list]) => list.map((n) => [n, cat]));
 
   /* ------------------------------------------------------------------ sample data */
   function sampleData() {
@@ -173,7 +179,7 @@
   let DB = null;
   let ME = store.get('tt-manager') || '';
   let PW = store.get('tt-pw', true) || '';
-  const ui = { teamFilter: 'all', teamQuery: '', teamSort: 'name', trainView: 'board', trainQuery: '', matrixCat: 'all', matrixQuery: '', vaTab: 'overview' };
+  const ui = { teamFilter: 'all', teamQuery: '', teamSort: 'name', trainView: 'board', trainQuery: '', matrixCat: 'overview', openCats: {}, matrixQuery: '', vaTab: 'overview' };
   let C = null; // derived cache
 
   function normalise(d) {
@@ -191,7 +197,11 @@
   const activePeople = () => DB.people.filter((p) => p.active !== 'N');
   const activeSkills = () => DB.skills.filter((s) => s.active !== 'N');
   const person = (id) => DB.people.find((p) => p.id === id);
-  const categories = () => { const c = []; activeSkills().forEach((s) => { if (!c.includes(s.category)) c.push(s.category); }); return c; };
+  const categories = () => { const c = []; activeSkills().forEach((s) => { if (!c.includes(s.category)) c.push(s.category); }); const i = c.indexOf(OTHER_CAT); if (i >= 0) c.push(c.splice(i, 1)[0]); return c; };
+  const skillsIn = (cat) => activeSkills().filter((s) => s.category === cat);
+  const catAvg = (pid, cat) => { const m = derive().latest[pid] || {}; const v = skillsIn(cat).map((s) => m[s.name]).filter((x) => x); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const catRated = (pid, cat) => { const m = derive().latest[pid] || {}; return skillsIn(cat).filter((s) => m[s.name]).length; };
+  const chev = '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
 
   function derive() {
     if (C) return C;
@@ -510,10 +520,13 @@
       const prevSnap = (c.hist[p.id] || []).length > 1 ? c.hist[p.id][c.hist[p.id].length - 2].snapshot : {};
       content = `<div class="grid grid-2">
         <section class="card"><div class="card-head"><h2>Skills</h2><span class="sub">Latest rating ${c.last[p.id] ? '· ' + fmt(c.last[p.id]) : ''}</span><button class="btn btn-sm right" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate</button></div>
-          <div class="card-body">${Object.keys(m).length ? categories().map((cat) => `<div class="cat-title">${esc(cat)}</div>${activeSkills().filter((s) => s.category === cat).map((s) => {
-            const v = m[s.name], pv = prevSnap[s.name];
-            return `<div class="skill-row"><span class="skill-name">${esc(s.name)}</span>${segs(v)}${badge(v)}${v && pv && v !== pv ? deltaHtml(v - pv) : '<span></span>'}</div>`;
-          }).join('')}`).join('') : `<div class="empty"><b>Not rated yet</b>Give ${esc(p.name.split(' ')[0])} a first rating to see their skills.<div style="margin-top:12px"><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate now</button></div></div>`}</div></section>
+          <div class="card-body" style="padding-top:8px">${Object.keys(m).length ? categories().map((cat) => {
+            const list = skillsIn(cat), rated = list.filter((s) => m[s.name]), unrated = list.filter((s) => !m[s.name]);
+            if (cat === OTHER_CAT && !rated.length) return '';
+            return `<details class="group" ${ui.openCats && ui.openCats[cat] ? 'open' : ''} data-cat="${esc(cat)}"><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta">${rated.length}/${list.length} rated</span>${badge(catAvg(p.id, cat), true)}</summary>
+              <div class="g-body">${rated.map((s) => { const v = m[s.name], pv = prevSnap[s.name]; return `<div class="skill-row"><span class="skill-name">${esc(s.name)}</span>${segs(v)}${badge(v)}${v && pv && v !== pv ? deltaHtml(v - pv) : '<span></span>'}</div>`; }).join('')}
+              ${unrated.length && cat !== OTHER_CAT ? `<div class="g-unrated">Not rated yet: ${unrated.map((s) => esc(s.name)).join(' · ')}</div>` : ''}</div></details>`;
+          }).join('') : `<div class="empty"><b>Not rated yet</b>Give ${esc(p.name.split(' ')[0])} a first rating to see their skills.<div style="margin-top:12px"><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate now</button></div></div>`}</div></section>
         <div class="stack va-side">
           <section class="card card-pad"><div class="stat-row">
             <div class="stat"><div class="l">Skill level</div><div class="v">${one(c.avg[p.id])}</div></div>
@@ -634,31 +647,40 @@
   function pageMatrix() {
     const c = derive();
     const cats = categories();
-    const skills = activeSkills().filter((s) => ui.matrixCat === 'all' || s.category === ui.matrixCat);
+    if (ui.matrixCat !== 'overview' && !cats.includes(ui.matrixCat)) ui.matrixCat = 'overview';
+    const overview = ui.matrixCat === 'overview';
     const q = ui.matrixQuery.trim().toLowerCase();
     const people = activePeople().filter((p) => !q || p.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
-    const groups = []; skills.forEach((s) => { const g = groups[groups.length - 1]; if (g && g.cat === s.category) g.n++; else groups.push({ cat: s.category, n: 1 }); });
+    const skills = overview ? [] : skillsIn(ui.matrixCat);
+    const teamCat = (cat) => { const v = people.map((p) => catAvg(p.id, cat)).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    const head = overview
+      ? `<tr><th class="rowhead" style="vertical-align:bottom;padding:10px 14px">VA</th>${cats.map((k) => `<th class="sk"><button class="sk-link" data-act="mx-cat" data-id="${esc(k)}" title="Open ${esc(k)}">${esc(k)}</button></th>`).join('')}<th class="cat" style="vertical-align:bottom;text-align:center">Overall</th></tr>`
+      : `<tr><th class="rowhead" style="vertical-align:bottom;padding:10px 14px">VA</th>${skills.map((s) => `<th class="sk" title="${esc(s.name)}">${esc(s.name)}</th>`).join('')}<th class="cat" style="vertical-align:bottom;text-align:center">Avg</th></tr>`;
+    const rows = people.map((p) => {
+      const m = c.latest[p.id] || {};
+      const cells = overview
+        ? cats.map((k) => { const v = catAvg(p.id, k); return `<td class="cell"><button class="sc${lvl(v)}" data-act="mx-cat" data-id="${esc(k)}" aria-label="${esc(p.name)}, ${esc(k)}: ${v ? one(v) : 'not rated'}">${v ? one(v) : '–'}</button></td>`; }).join('')
+        : skills.map((s) => `<td class="cell"><button class="sc${lvl(m[s.name])}" data-act="rate" data-id="${esc(p.id)}" data-cat="${esc(ui.matrixCat)}" aria-label="${esc(p.name)}, ${esc(s.name)}: ${m[s.name] || 'not rated'}">${m[s.name] || '–'}</button></td>`).join('');
+      const avg = overview ? c.avg[p.id] : catAvg(p.id, ui.matrixCat);
+      return `<tr><th class="rowhead" scope="row"><a class="person" href="#/va/${esc(p.id)}" style="text-decoration:none">${avatar(p, 'sm')}<span class="nm" style="font-weight:600">${esc(p.name)}</span></a></th>${cells}<td class="cell">${badge(avg, true)}</td></tr>`;
+    }).join('');
+    const foot = overview
+      ? cats.map((k) => `<td><span class="score-badge sc${lvl(teamCat(k))}">${one(teamCat(k))}</span></td>`).join('') + `<td>${badge(c.team, true)}</td>`
+      : skills.map((s) => `<td><span class="score-badge sc${lvl(c.skillAvg[s.name])}">${one(c.skillAvg[s.name])}</span></td>`).join('') + `<td>${badge(teamCat(ui.matrixCat), true)}</td>`;
     const body = `
-      <div class="page-head"><div><h1>Skill matrix</h1><p>Every VA against every skill. Click a cell to update a rating.</p></div>
+      <div class="page-head"><div><h1>Skill matrix</h1><p>${overview ? 'Average level per category. Click a category to see its skills.' : 'Every VA against every skill in this category. Click a cell to update a rating.'}</p></div>
         <div class="actions"><div class="legend">${SCALE.map((s) => `<span><i class="sc${s.n}"></i>${s.n} ${s.label}</span>`).join('')}</div></div></div>
       <div class="toolbar">
         <label class="search-field">${ic('search')}<span class="sr-only">Search VAs</span><input class="input" id="mx-q" type="search" placeholder="Filter VAs" value="${esc(ui.matrixQuery)}"></label>
-        <label><span class="sr-only">Category</span><select class="select" id="mx-cat"><option value="all">All categories</option>${cats.map((k) => `<option ${ui.matrixCat === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
       </div>
-      <section class="card"><div class="matrix-wrap"><table class="matrix">
-        <thead><tr><th class="rowhead" rowspan="2" style="vertical-align:bottom;padding:10px 14px">VA</th>${groups.map((g) => `<th class="cat" colspan="${g.n}">${esc(g.cat)}</th>`).join('')}<th class="cat" rowspan="2" style="vertical-align:bottom;text-align:center">Avg</th></tr>
-          <tr>${skills.map((s) => `<th class="sk" title="${esc(s.name)}">${esc(s.name)}</th>`).join('')}</tr></thead>
-        <tbody>${people.map((p) => { const m = c.latest[p.id] || {}; return `<tr><th class="rowhead" scope="row"><a class="person" href="#/va/${esc(p.id)}" style="text-decoration:none">${avatar(p, 'sm')}<span class="nm" style="font-weight:600">${esc(p.name)}</span></a></th>
-          ${skills.map((s) => `<td class="cell"><button class="sc${lvl(m[s.name])}" data-act="rate" data-id="${esc(p.id)}" aria-label="${esc(p.name)}, ${esc(s.name)}: ${m[s.name] || 'not rated'}">${m[s.name] || '–'}</button></td>`).join('')}
-          <td class="cell">${badge(c.avg[p.id], true)}</td></tr>`; }).join('')}</tbody>
-        <tfoot><tr><td class="rowhead" style="text-align:left;padding-left:14px">Team average</td>${skills.map((s) => `<td><span class="score-badge sc${lvl(c.skillAvg[s.name])}">${one(c.skillAvg[s.name])}</span></td>`).join('')}<td>${badge(c.team, true)}</td></tr></tfoot>
+      <div class="cat-tabs" role="tablist" aria-label="Category"><button role="tab" aria-selected="${overview}" data-act="mx-cat" data-id="overview">Overview</button>${cats.map((k) => `<button role="tab" aria-selected="${ui.matrixCat === k}" data-act="mx-cat" data-id="${esc(k)}">${esc(k)} <span class="n">${skillsIn(k).length}</span></button>`).join('')}</div>
+      <section class="card"><div class="matrix-wrap"><table class="matrix ${overview ? 'overview' : ''}">
+        <thead>${head}</thead><tbody>${rows}</tbody>
+        <tfoot><tr><td class="rowhead" style="text-align:left;padding-left:14px">Team average</td>${foot}</tr></tfoot>
       </table></div></section>`;
     return {
-      title: 'Skill matrix', crumbs: '<b>Skill matrix</b>', body,
-      after() {
-        $('#mx-cat').addEventListener('change', (e) => { ui.matrixCat = e.target.value; render(); });
-        $('#mx-q').addEventListener('change', (e) => { ui.matrixQuery = e.target.value; render(); });
-      },
+      title: 'Skill matrix', crumbs: overview ? '<b>Skill matrix</b>' : `<a href="#/matrix" data-act="mx-cat" data-id="overview">Skill matrix</a><span>/</span><b>${esc(ui.matrixCat)}</b>`, body,
+      after() { $('#mx-q').addEventListener('change', (e) => { ui.matrixQuery = e.target.value; render(); }); },
     };
   }
 
@@ -689,9 +711,11 @@
             <p class="muted" style="margin:0">${DEMO ? 'Paste your Apps Script web app URL into <code>config.js</code> to switch to your real team. Changes made here are not saved.' : 'Every change is saved to the Team Troy Google Sheet. You can open the sheet any time to read or export the data.'}</p></div></section>
         </div>
         <section class="card"><div class="card-head"><h2>Skills</h2><span class="sub">${activeSkills().length} active</span><button class="btn btn-sm right" data-act="add-skill">${ic('plus')}Add skill</button></div>
-          <div class="table-wrap"><table class="table"><thead><tr><th>Skill</th><th>Category</th><th>Status</th><th><span class="sr-only">Edit</span></th></tr></thead><tbody>
-          ${DB.skills.map((k, i) => `<tr><td style="font-weight:500">${esc(k.name)}</td><td class="muted">${esc(k.category)}</td><td>${k.active === 'N' ? '<span class="pill tone-bad">Hidden</span>' : '<span class="pill tone-good">Active</span>'}</td><td><button class="icon-btn" data-act="edit-skill" data-id="${i}" aria-label="Edit ${esc(k.name)}">${ic('edit')}</button></td></tr>`).join('')}
-          </tbody></table></div></section>
+          <div class="card-body" style="padding-top:8px">${[...new Set(DB.skills.map((k) => k.category))].sort((a, b) => (a === OTHER_CAT) - (b === OTHER_CAT)).map((cat) => {
+            const list = DB.skills.map((k, i) => ({ k, i })).filter((x) => x.k.category === cat);
+            return `<details class="group"><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta">${list.filter((x) => x.k.active !== 'N').length} active${list.some((x) => x.k.active === 'N') ? ` · ${list.filter((x) => x.k.active === 'N').length} hidden` : ''}</span></summary>
+              <ul class="g-list">${list.map(({ k, i }) => `<li><span class="${k.active === 'N' ? 'muted' : ''}">${esc(k.name)}</span>${k.active === 'N' ? '<span class="pill tone-bad">Hidden</span>' : ''}<button class="icon-btn" data-act="edit-skill" data-id="${i}" aria-label="Edit ${esc(k.name)}">${ic('edit')}</button></li>`).join('')}</ul></details>`;
+          }).join('')}</div></section>
       </div>`;
     return {
       title: 'Settings', crumbs: '<b>Settings</b>', body,
@@ -738,32 +762,87 @@
   }
   const personOptions = (sel, exclude) => activePeople().filter((p) => p.id !== exclude).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 
-  function rateDialog(pid) {
+  function rateDialog(pid, openCat) {
     const c = derive();
+    const keyOf = (name) => 'r_' + btoa(unescape(encodeURIComponent(name))).replace(/[=+/]/g, '');
+    const row = (name, v, isNew) => `<div class="rate-row" data-name="${esc(name.toLowerCase())}"><div><div class="nm">${esc(name)}${isNew ? ' <span class="pill plain tone-accent">New</span>' : ''}</div><div class="hint" data-hint>${v ? `Current: ${v} · ${SCALE[v - 1].label}` : 'Not rated yet'}</div></div>
+          <fieldset class="scale" aria-label="${esc(name)}" data-skill="${esc(name)}">${SCALE.map((x) => `<label title="${x.n} · ${x.label}: ${x.desc}"><input type="radio" name="${keyOf(name)}" value="${x.n}" ${v === x.n ? 'checked' : ''}><span>${x.n}</span></label>`).join('')}</fieldset></div>`;
     const renderList = (id) => {
       const m = c.latest[id] || {};
-      return categories().map((cat) => `<div class="rate-cat">${esc(cat)}</div>${activeSkills().filter((s) => s.category === cat).map((s) => {
-        const v = m[s.name];
-        const key = 'r_' + btoa(unescape(encodeURIComponent(s.name))).replace(/=/g, '');
-        return `<div class="rate-row"><div><div class="nm">${esc(s.name)}</div><div class="hint" data-hint>${v ? `Current: ${v} · ${SCALE[v - 1].label}` : 'Not rated yet'}</div></div>
-          <fieldset class="scale" aria-label="${esc(s.name)}" data-skill="${esc(s.name)}">${SCALE.map((x) => `<label title="${x.n} · ${x.label}: ${x.desc}"><input type="radio" name="${key}" value="${x.n}" ${v === x.n ? 'checked' : ''}><span>${x.n}</span></label>`).join('')}</fieldset></div>`;
-      }).join('')}`).join('');
+      const cats = categories().filter((k) => k !== OTHER_CAT);
+      const first = openCat && cats.includes(openCat) ? openCat : cats[0];
+      const groups = cats.map((cat) => {
+        const list = skillsIn(cat), done = list.filter((s) => m[s.name]).length;
+        return `<details class="group" data-cat="${esc(cat)}" ${cat === first ? 'open' : ''}><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta" data-count>${done}/${list.length} rated</span></summary>
+          <div class="g-body">${list.map((s) => row(s.name, m[s.name])).join('')}</div></details>`;
+      }).join('');
+      const others = skillsIn(OTHER_CAT).filter((s) => m[s.name]);
+      return groups + `<details class="group" data-cat="${OTHER_CAT}" ${others.length || openCat === OTHER_CAT ? 'open' : ''}><summary>${chev}<span class="g-name">${OTHER_CAT}</span><span class="g-meta" data-count>${others.length ? others.length + ' rated' : 'Add anything not listed'}</span></summary>
+        <div class="g-body" id="other-rows">${others.map((s) => row(s.name, m[s.name])).join('')}</div>
+        <div class="add-other"><div class="add-other-title">${ic('plus')}Add a skill or tool that isn't listed</div>
+          <div class="add-other-row"><label class="field grow"><span class="sr-only">Skill or tool name</span><input class="input" id="new-skill-name" placeholder="e.g. Podio, Canva Pro, Spanish speaking" list="all-skills" autocomplete="off"></label>
+          <label class="field"><span class="sr-only">Category</span><select class="select" id="new-skill-cat">${[OTHER_CAT].concat(cats).map((k) => `<option>${esc(k)}</option>`).join('')}</select></label>
+          <button type="button" class="btn" id="new-skill-add">Add</button></div>
+          <datalist id="all-skills">${DB.skills.map((s) => `<option value="${esc(s.name)}">`).join('')}</datalist></div></details>`;
     };
-    const first = pid || (activePeople()[0] || {}).id;
+    const firstPid = pid || (activePeople()[0] || {}).id;
+    const added = [];
     modal({
-      title: 'Rate skills', sub: 'Tap a level for each skill. Unchanged skills keep their current score.', wide: true, submit: 'Save ratings',
-      body: `<div class="row2"><label class="field"><span>VA</span><select class="select" name="pid" ${pid ? 'disabled' : ''}>${personOptions(first)}</select></label>
+      title: 'Rate skills', sub: 'Open a category and tap a level. Skills you leave alone keep their current score.', wide: true, submit: 'Save ratings',
+      body: `<div class="row2"><label class="field"><span>VA</span><select class="select" name="pid" ${pid ? 'disabled' : ''}>${personOptions(firstPid)}</select></label>
         <label class="field"><span>Date</span><input class="input" type="date" name="date" value="${isoDay(new Date())}" max="${isoDay(new Date())}"></label></div>
-        <div class="scale-key">${SCALE.map((x) => `<span><b>${x.n}</b> ${x.label} — ${x.desc}</span>`).join('')}</div>
-        <div class="rate-list" id="rate-list">${renderList(first)}</div>
+        <div class="rate-tools"><label class="search-field" style="flex:1;width:auto">${ic('search')}<span class="sr-only">Find a skill</span><input class="input" id="rate-q" type="search" placeholder="Find a skill…" autocomplete="off"></label>
+          <details class="scale-help"><summary>What do 1–5 mean?</summary><div class="scale-key">${SCALE.map((x) => `<span><b>${x.n}</b> ${x.label} — ${x.desc}</span>`).join('')}</div></details></div>
+        <div class="rate-list" id="rate-list">${renderList(firstPid)}</div>
         <label class="field"><span>Note <span class="muted" style="font-weight:400">(optional)</span></span><textarea class="textarea" name="note" placeholder="Anything worth remembering about this rating?"></textarea></label>`,
       onMount(d, form) {
         const sel = form.elements.pid;
-        sel.addEventListener('change', () => { $('#rate-list', d).innerHTML = renderList(sel.value); });
+        const list = $('#rate-list', d);
+        const updateCount = (g) => {
+          if (!g) return;
+          const total = $$('.rate-row', g).length, done = $$('.rate-row', g).filter((r) => r.querySelector('input:checked')).length;
+          const el = g.querySelector('[data-count]');
+          if (el) el.textContent = g.dataset.cat === OTHER_CAT ? (done ? done + ' rated' : 'Add anything not listed') : `${done}/${total} rated`;
+        };
+        const wireAdd = () => {
+          const addBtn = $('#new-skill-add', d), nameIn = $('#new-skill-name', d), catSel = $('#new-skill-cat', d);
+          const add = () => {
+            const name = nameIn.value.trim().replace(/\s+/g, ' ');
+            if (!name) { nameIn.focus(); return; }
+            const existing = DB.skills.find((s) => s.name.toLowerCase() === name.toLowerCase()) || added.find((s) => s.name.toLowerCase() === name.toLowerCase());
+            const existingRow = existing && list.querySelector(`.rate-row[data-name="${CSS.escape(existing.name.toLowerCase())}"]`);
+            if (existingRow) {
+              const g = existingRow.closest('details'); g.open = true;
+              existingRow.scrollIntoView({ block: 'center', behavior: 'smooth' }); existingRow.classList.add('flash'); setTimeout(() => existingRow.classList.remove('flash'), 1600);
+              toast(`"${existing.name}" is already in ${existing.category}`); nameIn.value = ''; return;
+            }
+            const rec = existing ? { name: existing.name, category: existing.category, active: 'Y', reactivate: true } : { name, category: catSel.value, active: 'Y' };
+            added.push(rec);
+            const target = rec.category === OTHER_CAT ? $('#other-rows', d) : list.querySelector(`details[data-cat="${CSS.escape(rec.category)}"] .g-body`);
+            target.insertAdjacentHTML('beforeend', row(rec.name, null, true));
+            const g = target.closest('details'); g.open = true; updateCount(g);
+            target.lastElementChild.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            nameIn.value = '';
+          };
+          addBtn.addEventListener('click', add);
+          nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+        };
+        wireAdd();
+        sel.addEventListener('change', () => { added.length = 0; list.innerHTML = renderList(sel.value); wireAdd(); });
+        $('#rate-q', d).addEventListener('input', (e) => {
+          const q = e.target.value.trim().toLowerCase();
+          $$('details.group', list).forEach((g) => {
+            let any = false;
+            $$('.rate-row', g).forEach((r) => { const hit = !q || r.dataset.name.includes(q); r.hidden = !hit; any = any || hit; });
+            g.hidden = !!q && !any && g.dataset.cat !== OTHER_CAT;
+            if (q && any) g.open = true;
+          });
+        });
         form.addEventListener('change', (e) => {
-          if (e.target.type !== 'radio') return;
+          if (e.target.type !== 'radio' || !e.target.closest('.scale')) return;
           const x = SCALE[Number(e.target.value) - 1];
           e.target.closest('.rate-row').querySelector('[data-hint]').innerHTML = `<b style="color:var(--ink)">${x.n} · ${x.label}</b> — ${x.desc}`;
+          updateCount(e.target.closest('details'));
         });
       },
       onSubmit(f, form) {
@@ -775,10 +854,16 @@
         if (!rows.length) { toast('Pick at least one level', true); return false; }
         const note = String(f.get('note') || '').trim();
         if (note) rows[0].note = note;
+        const ratedNames = new Set(rows.map((r) => r.skill));
+        const newSkills = added.filter((s) => ratedNames.has(s.name));
+        if (newSkills.length) {
+          const next = DB.skills.filter((s) => !newSkills.some((n) => n.reactivate && n.name === s.name)).concat(newSkills.map(({ name, category }) => ({ name, category, active: 'Y' })));
+          save('saveSkills', { skills: next }, () => { DB.skills = next; });
+        }
         save('saveRatings', { rows, note: note ? { id: 'n' + uid(), personId: id, ts, type: 'Note', text: 'Rating note: ' + note, manager: ME } : null }, () => {
           DB.ratings.push(...rows);
           if (note) DB.notes.push({ id: 'n' + uid(), personId: id, ts, type: 'Note', text: 'Rating note: ' + note, manager: ME });
-        }, `Saved ${rows.length} ratings for ${p ? p.name : 'VA'}`);
+        }, `Saved ${rows.length} rating${rows.length === 1 ? '' : 's'} for ${p ? p.name : 'VA'}${newSkills.length ? ` · added ${newSkills.length} new skill${newSkills.length === 1 ? '' : 's'}` : ''}`);
       },
     });
   }
@@ -790,7 +875,7 @@
     const trainerPre = t ? t.trainerId : opts.trainerId || '';
     const defaultSkills = (id) => weakSkills(id).filter((s) => s.v <= 3).slice(0, 2).map((s) => s.name);
     const chosen = t ? t.skills : traineeId ? defaultSkills(traineeId) : [];
-    const skillChips = (sel, id) => { const m = c.latest[id] || {}; return activeSkills().map((s) => `<label><input type="checkbox" name="skills" value="${esc(s.name)}" ${sel.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)}${m[s.name] ? ` <b style="opacity:.6">${m[s.name]}</b>` : ''}</span></label>`).join(''); };
+    const skillChips = (sel, id) => { const m = c.latest[id] || {}; return categories().map((cat) => { const list = skillsIn(cat); const n = list.filter((s) => sel.includes(s.name)).length; return `<details class="group compact" data-cat="${esc(cat)}" ${n ? 'open' : ''}><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta" data-count>${n ? n + ' selected' : ''}</span></summary><div class="check-chips g-body">${list.map((s) => `<label data-name="${esc(s.name.toLowerCase())}"><input type="checkbox" name="skills" value="${esc(s.name)}" ${sel.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)}${m[s.name] ? ` <b style="opacity:.6">${m[s.name]}</b>` : ''}</span></label>`).join('')}</div></details>`; }).join(''); };
     const suggestHtml = (tid, skills, current) => {
       const list = suggestTrainers(tid, skills);
       if (!tid || !skills.length) return '<div class="muted">Choose a trainee and at least one focus skill to see suggested trainers.</div>';
@@ -801,7 +886,9 @@
       title: t ? 'Training' : 'New training', sub: t ? `Started ${fmt(t.start)}` : 'Choose a trainee, what they need to learn, and who will train them.', wide: true, submit: t ? 'Save changes' : 'Assign trainer',
       danger: t ? { label: 'Delete', confirm: 'Delete this training?', run: () => save('deleteTraining', { id: t.id }, () => { DB.training = DB.training.filter((x) => x.id !== t.id); }, 'Training deleted') } : null,
       body: `<label class="field"><span>Trainee</span><select class="select" name="traineeId" required><option value="">Select a VA…</option>${personOptions(traineeId)}</select></label>
-        <div class="field"><span>Focus skills</span><small>Their lowest-rated skills are pre-selected. The number shows their current level.</small><div class="check-chips" id="tr-skills">${skillChips(chosen, traineeId)}</div></div>
+        <div class="field"><span>Focus skills</span><small>Their lowest-rated skills are pre-selected. The number shows their current level.</small>
+          <label class="search-field" style="width:100%">${ic('search')}<span class="sr-only">Find a skill</span><input class="input" id="tr-q" type="search" placeholder="Find a skill…" autocomplete="off"></label>
+          <div class="skill-picker" id="tr-skills">${skillChips(chosen, traineeId)}</div></div>
         <div class="field"><span>Suggested trainers</span><div class="suggest" id="tr-suggest">${suggestHtml(traineeId, chosen, trainerPre)}</div></div>
         <label class="field"><span>Or choose any trainer</span><select class="select" name="trainerOther"><option value="">— Use the suggestion above —</option>${personOptions(trainerPre, traineeId)}</select></label>
         <div class="row3"><label class="field"><span>Target level</span><select class="select" name="target">${[3, 4, 5].map((n) => `<option value="${n}" ${(t ? t.target : 4) === n ? 'selected' : ''}>${n} · ${SCALE[n - 1].label}</option>`).join('')}</select></label>
@@ -823,7 +910,11 @@
           form.elements.trainerOther.innerHTML = `<option value="">— Use the suggestion above —</option>${personOptions('', tid)}`;
           refresh();
         });
-        $('#tr-skills', d).addEventListener('change', refresh);
+        $('#tr-skills', d).addEventListener('change', (e) => { const g = e.target.closest('details'); if (g) { const n = $$('input:checked', g).length; g.querySelector('[data-count]').textContent = n ? n + ' selected' : ''; } refresh(); });
+        $('#tr-q', d).addEventListener('input', (e) => {
+          const q = e.target.value.trim().toLowerCase();
+          $$('#tr-skills details', d).forEach((g) => { let any = false; $$('label', g).forEach((l) => { const hit = !q || l.dataset.name.includes(q); l.hidden = !hit; any = any || hit; }); g.hidden = !!q && !any; if (q && any) g.open = true; });
+        });
       },
       onSubmit(f) {
         const traineeId2 = f.get('traineeId');
@@ -985,7 +1076,8 @@
     }
     const id = el.dataset.id;
     switch (el.dataset.act) {
-      case 'rate': return rateDialog(id);
+      case 'rate': return rateDialog(id, el.dataset.cat);
+      case 'mx-cat': e.preventDefault(); ui.matrixCat = id; render.keepScroll = false; if (location.hash !== '#/matrix') location.hash = '#/matrix'; else render(); return;
       case 'assign': return trainingDialog({ traineeId: id });
       case 'assign-as-trainer': return trainingDialog({ trainerId: id });
       case 'new-training': return trainingDialog({});
@@ -1013,6 +1105,7 @@
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (DB && ME && !$('dialog[open]')) palette(); }
     if (e.key === 'Enter' && e.target.matches('.tcard')) e.target.click();
   });
+  document.addEventListener('toggle', (e) => { const g = e.target; if (g.matches && g.matches('#page details.group[data-cat]')) ui.openCats[g.dataset.cat] = g.open; }, true);
   window.addEventListener('storage', (e) => { if (e.key === 'tt-color-scheme') $('meta[name="color-scheme"]').content = e.newValue || 'light dark'; });
 
   /* ------------------------------------------------------------------ boot */

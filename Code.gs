@@ -30,12 +30,16 @@ const TABS = {
 };
 
 const STANDARD_SKILLS = [
-  ['Email Management', 'Administrative'], ['Calendar & Scheduling', 'Administrative'], ['Data Entry & Accuracy', 'Administrative'],
-  ['Microsoft Excel', 'Tools'], ['Google Workspace', 'Tools'], ['CRM Tools', 'Tools'], ['Project Management Tools', 'Tools'],
+  ['Email Management', 'Administrative'], ['Calendar & Scheduling', 'Administrative'], ['Data Entry & Accuracy', 'Administrative'], ['Records & File Management', 'Administrative'], ['Listing Management', 'Administrative'], ['CMA & Market Analysis', 'Administrative'], ['Weekly Reporting', 'Administrative'], ['Open House Coordination', 'Administrative'], ['Transcription', 'Administrative'],
+  ['Microsoft Excel', 'Tools'], ['Google Workspace', 'Tools'], ['CRM Tools', 'Tools'], ['Real Estate CRMs (kvCORE, Follow Up Boss, Lofty, CINC, KW Command)', 'Tools'], ['CRM Automations & Drip Campaigns', 'Tools'], ['Project Management Tools', 'Tools'],
   ['Written Communication', 'Communication'], ['Verbal Communication', 'Communication'], ['Customer Service', 'Communication'],
   ['Internet Research', 'Research & Analysis'], ['Problem Solving', 'Research & Analysis'],
   ['Time Management', 'Professional'], ['Attention to Detail', 'Professional'],
-  ['Social Media Management', 'Marketing'], ['Canva / Basic Design', 'Marketing'], ['Basic Bookkeeping', 'Finance'],
+  ['Social Media Management', 'Marketing & Social Media'], ['Content Calendar Planning', 'Marketing & Social Media'], ['Social Media Engagement & Community', 'Marketing & Social Media'], ['Paid Ads (Google & Meta)', 'Marketing & Social Media'], ['Audience Research & Retargeting', 'Marketing & Social Media'], ['SEO & Keyword Research', 'Marketing & Social Media'], ['Web Analytics & Reporting', 'Marketing & Social Media'], ['Google Business Profile', 'Marketing & Social Media'], ['Email Marketing & Newsletters', 'Marketing & Social Media'], ['Landing Pages & Lead Capture Forms', 'Marketing & Social Media'], ['Post Scheduling (Meta Business Suite)', 'Marketing & Social Media'], ['Online Reviews & Reputation', 'Marketing & Social Media'], ['Contests & Promotions', 'Marketing & Social Media'],
+  ['Graphic Design (Canva / Photoshop / Illustrator)', 'Content Creation'], ['Brand Kits & Brand Consistency', 'Content Creation'], ['Video Editing', 'Content Creation'], ['Real Estate Content Writing', 'Content Creation'], ['Scripts & Podcasts', 'Content Creation'], ['Property Videos & Virtual Tours', 'Content Creation'],
+  ['Lead Generation Strategy', 'Lead Generation'], ['Cold Calling', 'Lead Generation'], ['Lead Qualification & Nurturing', 'Lead Generation'], ['FSBO & Expired Listings', 'Lead Generation'], ['Distressed Property Prospecting', 'Lead Generation'], ['Prospect Research & Data Mining', 'Lead Generation'], ['SMS Campaigns', 'Lead Generation'], ['Direct Mail Campaigns', 'Lead Generation'], ['Referral & Partner Outreach', 'Lead Generation'],
+  ['Contract-to-Close Coordination', 'Transaction Coordination'], ['Contract & Disclosure Prep', 'Transaction Coordination'], ['Transaction Software (Dotloop, SkySlope, DocuSign)', 'Transaction Coordination'], ['Deadline Tracking', 'Transaction Coordination'], ['Compliance & Fair Housing', 'Transaction Coordination'], ['Title, Escrow & Lender Coordination', 'Transaction Coordination'],
+  ['Basic Bookkeeping', 'Finance'],
 ];
 
 /* ============================== setup ============================== */
