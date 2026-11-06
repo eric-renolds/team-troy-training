@@ -41,6 +41,7 @@
     target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/>',
     sort: '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
     chat: '<path d="M4 5.5h16v11H9.5L5 20.5v-4H4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+    trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>',
     pin: '<path d="M9 3.5h6l-1 6.5 3.5 3.5h-11L10 10z"/><path d="M12 13.5v7"/>',
     refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 3.5V8h4.5M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20.5V16h-4.5"/>',
     trophy: '<path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1.5A3.5 3.5 0 0 0 7.5 11M17 6h3v1.5a3.5 3.5 0 0 1-3.5 3.5M12 14v3.5M8.5 20.5h7l-.8-3h-5.4z"/>',
@@ -597,7 +598,7 @@
             const list = skillsIn(cat), rated = list.filter((s) => m[s.name]), unrated = list.filter((s) => !m[s.name]);
             if (cat === OTHER_CAT && !rated.length) return '';
             return `<details class="group" ${ui.openCats && ui.openCats[cat] ? 'open' : ''} data-cat="${esc(cat)}"><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta">${rated.length}/${list.length} rated</span>${badge(catAvg(p.id, cat), true)}</summary>
-              <div class="g-body">${rated.map((s) => { const v = m[s.name], pv = prevSnap[s.name]; return `<div class="skill-row"><span class="skill-name">${esc(s.name)}</span>${segs(v)}${badge(v)}${v && pv && v !== pv ? deltaHtml(v - pv) : '<span></span>'}</div>`; }).join('')}
+              <div class="g-body">${rated.map((s) => { const v = m[s.name], pv = prevSnap[s.name]; return `<div class="skill-row"><span class="skill-name">${esc(s.name)}</span>${segs(v)}${badge(v)}${v && pv && v !== pv ? deltaHtml(v - pv) : '<span></span>'}<button class="icon-btn del-rating" data-act="del-rating" data-id="${esc(p.id)}" data-skill="${esc(s.name)}" title="Delete this rating" aria-label="Delete rating for ${esc(s.name)}">${ic('trash')}</button></div>`; }).join('')}
               ${unrated.length && cat !== OTHER_CAT ? `<div class="g-unrated">Not rated yet: ${unrated.map((s) => esc(s.name)).join(' · ')}</div>` : ''}</div></details>`;
           }).join('') : `<div class="empty"><b>Not rated yet</b>Give ${esc(p.name.split(' ')[0])} a first rating to see their skills.<div style="margin-top:12px"><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate now</button></div></div>`}</div></section>
         <div class="stack va-side">
@@ -622,7 +623,7 @@
     } else {
       const h = (c.hist[p.id] || []).slice().reverse();
       content = `<div class="grid grid-2e"><section class="card"><div class="card-head"><h2>Skill level over time</h2></div><div class="card-body">${lineChart(c.hist[p.id] || [])}</div></section>
-        <section class="card"><div class="card-head"><h2>Rating sessions</h2></div>${h.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>By</th><th>Skills rated</th><th>Level</th></tr></thead><tbody>${h.map((s) => `<tr><td class="nowrap">${fmt(s.ts)}</td><td>${esc(s.manager)}</td><td>${Object.keys(s.scores).length}</td><td>${badge(s.avg, true)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No ratings yet.</div>'}</section></div>`;
+        <section class="card"><div class="card-head"><h2>Rating sessions</h2></div>${h.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>By</th><th>Skills rated</th><th>Level</th><th><span class="sr-only">Delete</span></th></tr></thead><tbody>${h.map((s) => `<tr><td class="nowrap">${fmt(s.ts)}</td><td>${esc(s.manager)}</td><td>${Object.keys(s.scores).length}</td><td>${badge(s.avg, true)}</td><td style="width:44px;text-align:right"><button class="icon-btn" data-act="del-session" data-id="${esc(p.id)}" data-day="${esc(s.day)}" data-manager="${esc(s.manager)}" title="Delete this rating session" aria-label="Delete rating session from ${esc(fmt(s.ts))}">${ic('trash')}</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No ratings yet.</div>'}</section></div>`;
     }
     const body = `
       <section class="card" style="margin-bottom:20px">
@@ -1245,6 +1246,8 @@
       case 'edit-person': return personDialog(id);
       case 'remove-person': { const p = person(id); if (p && confirm(`Remove ${p.name} from the team?\n\nThis deletes their ratings, notes and trainings for good. To keep their history, edit them and set Status to Inactive instead.`)) removePerson(id); return; }
       case 'add-person': return personDialog();
+      case 'del-rating': return deleteSkillRating(id, el.dataset.skill);
+      case 'del-session': return deleteSession(id, el.dataset.day, el.dataset.manager);
       case 'tnote-new': return newTeamNote();
       case 'tnote-edit': return teamNoteDialog(id);
       case 'tnote-pin': { const n = DB.teamNotes.find((x) => x.id === id); if (!n) return; const rec = Object.assign({}, n, { pinned: !n.pinned }); return save('saveTeamNote', { teamNote: rec }, () => { DB.teamNotes = DB.teamNotes.map((x) => (x.id === id ? rec : x)); }, rec.pinned ? 'Pinned for everyone' : 'Unpinned'); }
@@ -1269,6 +1272,29 @@
   });
   document.addEventListener('toggle', (e) => { const g = e.target; if (g.matches && g.matches('#page details.group[data-cat]')) ui.openCats[g.dataset.cat] = g.open; }, true);
   window.addEventListener('storage', (e) => { if (e.key === 'tt-color-scheme') $('meta[name="color-scheme"]').content = e.newValue || 'light dark'; });
+
+  /* ------------------------------------------------------------------ deleting ratings
+     Every rating is a row in the sheet. Deleting one removes that row; the VA's previous score for
+     the skill (if any) becomes the current one again. */
+  function deleteRatings(rows, msg) {
+    const keys = rows.map((r) => ({ ts: r.ts, personId: r.personId, skill: r.skill }));
+    save('deleteRatings', { keys }, () => { const gone = new Set(rows); DB.ratings = DB.ratings.filter((r) => !gone.has(r)); }, msg);
+  }
+  function deleteSkillRating(pid, skill) {
+    const p = person(pid);
+    const list = DB.ratings.filter((r) => r.personId === pid && r.skill === skill).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    if (!p || !list.length) return;
+    const last = list[list.length - 1], prev = list[list.length - 2];
+    const msg = `Delete ${p.name}'s rating for "${skill}"?\n\nScore ${last.score}/${MAX}, rated by ${last.manager || 'a manager'} on ${fmt(last.ts)}.\n\n` +
+      (prev ? `Their previous score (${prev.score}/${MAX} from ${fmt(prev.ts)}) will show again.` : `"${skill}" will show as not rated.`) + '\n\nThis cannot be undone.';
+    if (confirm(msg)) deleteRatings([last], `Deleted ${skill} rating for ${p.name}`);
+  }
+  function deleteSession(pid, day, manager) {
+    const p = person(pid);
+    const rows = DB.ratings.filter((r) => r.personId === pid && isoDay(r.ts) === day && r.manager === manager);
+    if (!p || !rows.length) return;
+    if (confirm(`Delete the whole rating session for ${p.name}?\n\n${rows.length} skill rating${rows.length === 1 ? '' : 's'} by ${manager || 'a manager'} on ${fmt(rows[0].ts)}.\n\nThis cannot be undone.`)) deleteRatings(rows, `Deleted ${rows.length} rating${rows.length === 1 ? '' : 's'} for ${p.name}`);
+  }
 
   function newTeamNote() { ui.focusComposer = true; if (location.hash === '#/notes') render(); else { render.keepScroll = false; location.hash = '#/notes'; } }
 

@@ -112,6 +112,7 @@ function doPost(e) {
       switch (req.action) {
         case 'savePerson': upsert_('team', 'ID', personRow_(req.person)); break;
         case 'saveRatings': saveRatings_(req.rows || [], req.note); break;
+        case 'deleteRatings': deleteRatings_(req.keys || []); break;
         case 'saveTraining': upsert_('training', 'ID', trainingRow_(req.training)); break;
         case 'deleteTraining': deleteWhere_('training', 'ID', req.id); break;
         case 'saveNote': appendObj_('notes', noteRow_(req.note)); break;
@@ -168,6 +169,20 @@ function saveRatings_(rows, note) {
   const sh = sheet_('ratings');
   sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
   if (note && note.text) appendObj_('notes', noteRow_(note));
+}
+
+// Removes specific rating rows, matched on timestamp + person + skill.
+function deleteRatings_(keys) {
+  if (!keys.length) return;
+  const want = {}; keys.forEach((k) => (want[[k.ts, k.personId, k.skill].join('|')] = 1));
+  const sh = sheet_('ratings'), last = sh.getLastRow(), w = TABS.ratings.headers.length;
+  if (last < 2) return;
+  const rows = sh.getRange(2, 1, last - 1, w).getValues();
+  const norm = (c) => (c instanceof Date ? c.toISOString() : String(c));
+  const keep = rows.filter((r) => !want[[norm(r[0]), norm(r[1]), norm(r[3])].join('|')]);
+  if (keep.length === rows.length) return;
+  sh.getRange(2, 1, last - 1, w).clearContent();
+  if (keep.length) sh.getRange(2, 1, keep.length, w).setValues(keep.map((r) => r.map(norm)));
 }
 
 function trainingRow_(t) {
