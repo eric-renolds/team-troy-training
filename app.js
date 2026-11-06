@@ -76,7 +76,7 @@
   const agoTime = (v) => { const m = Math.floor((Date.now() - new Date(v)) / 60000); if (!(m >= 0)) return ago(v); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; if (m < 720) return Math.floor(m / 60) + ' h ago'; return ago(v); };
   const one = (n) => (n == null || isNaN(n) ? '—' : (Math.round(n * 10) / 10).toFixed(1));
   const MAX = 10; // rating scale is 1–10
-  const lvl = (n) => (n == null || isNaN(n) ? 0 : Math.max(1, Math.min(MAX, Math.round(n))));
+  const lvl = (n) => (!n || isNaN(n) ? 0 : Math.max(1, Math.min(MAX, Math.round(n))));
   const initials = (n) => String(n || '?').trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   const AV = ['#1E3058', '#8A5E1F', '#2F6B5A', '#6B3F6E', '#2C5C9A', '#9A4A35', '#4F5D2F', '#3D4C7A', '#7A5A2C', '#355E6E'];
   const avColor = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
@@ -88,7 +88,7 @@
   };
   const meter = (v) => `<div class="meter"><div class="meter-track"><div class="meter-fill" style="width:${v ? (v / MAX) * 100 : 0}%;background:var(--bar${lvl(v) || 1})"></div></div><span class="meter-val">${one(v)}</span></div>`;
   const segs = (v) => `<div class="segs" aria-label="${v || 0} out of ${MAX}">${Array.from({ length: MAX }, (_, k) => k + 1).map((i) => `<i style="${v && i <= v ? `background:var(--bar${lvl(v)})` : ''}"></i>`).join('')}</div>`;
-  const badge = (v, dec) => `<span class="score-badge sc${lvl(v)}">${v ? (dec ? one(v) : Number.isInteger(v) ? v : one(v)) : '–'}</span>`;
+  const badge = (v, dec) => `<span class="score-badge sc${lvl(v)}">${v ? (dec ? one(v) : Number.isInteger(v) ? v : one(v)) : '0'}</span>`;
 
   const SCALE = [
     { n: 1, label: 'Beginner', desc: 'no experience yet' },
@@ -599,7 +599,7 @@
             if (cat === OTHER_CAT && !rated.length) return '';
             return `<details class="group" ${ui.openCats && ui.openCats[cat] ? 'open' : ''} data-cat="${esc(cat)}"><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta">${rated.length}/${list.length} rated</span>${badge(catAvg(p.id, cat), true)}</summary>
               <div class="g-body">${rated.map((s) => { const v = m[s.name], pv = prevSnap[s.name]; return `<div class="skill-row"><span class="skill-name">${esc(s.name)}</span>${segs(v)}${badge(v)}${v && pv && v !== pv ? deltaHtml(v - pv) : '<span></span>'}<button class="icon-btn del-rating" data-act="del-rating" data-id="${esc(p.id)}" data-skill="${esc(s.name)}" title="Delete this rating" aria-label="Delete rating for ${esc(s.name)}">${ic('trash')}</button></div>`; }).join('')}
-              ${unrated.length && cat !== OTHER_CAT ? `<div class="g-unrated">Not rated yet: ${unrated.map((s) => esc(s.name)).join(' · ')}</div>` : ''}</div></details>`;
+              ${cat !== OTHER_CAT ? unrated.map((s) => `<div class="skill-row unrated"><span class="skill-name">${esc(s.name)}</span>${segs(0)}${badge(0)}<span></span><span></span></div>`).join('') : ''}</div></details>`;
           }).join('') : `<div class="empty"><b>Not rated yet</b>Give ${esc(p.name.split(' ')[0])} a first rating to see their skills.<div style="margin-top:12px"><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate now</button></div></div>`}</div></section>
         <div class="stack va-side">
           <section class="card card-pad"><div class="stat-row">
@@ -733,14 +733,14 @@
     const rows = people.map((p) => {
       const m = c.latest[p.id] || {};
       const cells = overview
-        ? cats.map((k) => { const v = catAvg(p.id, k); return `<td class="cell"><button class="sc${lvl(v)}" data-act="mx-cat" data-id="${esc(k)}" aria-label="${esc(p.name)}, ${esc(k)}: ${v ? one(v) : 'not rated'}">${v ? one(v) : '–'}</button></td>`; }).join('')
-        : skills.map((s) => `<td class="cell"><button class="sc${lvl(m[s.name])}" data-act="rate" data-id="${esc(p.id)}" data-cat="${esc(ui.matrixCat)}" aria-label="${esc(p.name)}, ${esc(s.name)}: ${m[s.name] || 'not rated'}">${m[s.name] || '–'}</button></td>`).join('');
+        ? cats.map((k) => { const v = catAvg(p.id, k); return `<td class="cell"><button class="sc${lvl(v)}" data-act="mx-cat" data-id="${esc(k)}" aria-label="${esc(p.name)}, ${esc(k)}: ${v ? one(v) : 'not rated'}">${v ? one(v) : '0'}</button></td>`; }).join('')
+        : skills.map((s) => `<td class="cell"><button class="sc${lvl(m[s.name])}" data-act="rate" data-id="${esc(p.id)}" data-cat="${esc(ui.matrixCat)}" aria-label="${esc(p.name)}, ${esc(s.name)}: ${m[s.name] || 'not rated'}">${m[s.name] || '0'}</button></td>`).join('');
       const avg = overview ? c.avg[p.id] : catAvg(p.id, ui.matrixCat);
       return `<tr><th class="rowhead" scope="row"><a class="person" href="#/va/${esc(p.id)}" style="text-decoration:none">${avatar(p, 'sm')}<span class="nm" style="font-weight:600">${esc(p.name)}</span></a></th>${cells}<td class="cell">${badge(avg, true)}</td></tr>`;
     }).join('');
     const foot = overview
-      ? cats.map((k) => `<td><span class="score-badge sc${lvl(teamCat(k))}">${one(teamCat(k))}</span></td>`).join('') + `<td>${badge(c.team, true)}</td>`
-      : skills.map((s) => `<td><span class="score-badge sc${lvl(c.skillAvg[s.name])}">${one(c.skillAvg[s.name])}</span></td>`).join('') + `<td>${badge(teamCat(ui.matrixCat), true)}</td>`;
+      ? cats.map((k) => `<td><span class="score-badge sc${lvl(teamCat(k))}">${teamCat(k) != null ? one(teamCat(k)) : '0'}</span></td>`).join('') + `<td>${badge(c.team, true)}</td>`
+      : skills.map((s) => `<td><span class="score-badge sc${lvl(c.skillAvg[s.name])}">${c.skillAvg[s.name] != null ? one(c.skillAvg[s.name]) : '0'}</span></td>`).join('') + `<td>${badge(teamCat(ui.matrixCat), true)}</td>`;
     const body = `
       <div class="page-head"><div><h1>Skill matrix</h1><p>${overview ? 'Average level per category. Click a category to see its skills.' : 'Every VA against every skill in this category. Click a cell to update a rating.'}</p></div>
         <div class="actions"><div class="legend-10"><span>${SCALE[0].label}</span><span class="ramp">${SCALE.map((s) => `<i class="sc${s.n}" title="${s.n} · ${s.label}: ${s.desc}">${s.n}</i>`).join('')}</span><span>${SCALE[MAX - 1].label}</span></div></div></div>
@@ -924,7 +924,7 @@
   function rateDialog(pid, openCat) {
     const c = derive();
     const keyOf = (name) => 'r_' + btoa(unescape(encodeURIComponent(name))).replace(/[=+/]/g, '');
-    const row = (name, v, isNew) => `<div class="rate-row" data-name="${esc(name.toLowerCase())}"><div><div class="nm">${esc(name)}${isNew ? ' <span class="pill plain tone-accent">New</span>' : ''}</div><div class="hint" data-hint>${v ? `Current: ${v} · ${SCALE[v - 1].label}` : 'Not rated yet'}</div></div>
+    const row = (name, v, isNew) => `<div class="rate-row" data-name="${esc(name.toLowerCase())}"><div><div class="nm">${esc(name)}${isNew ? ' <span class="pill plain tone-accent">New</span>' : ''}</div><div class="hint" data-hint>${v ? `Current: ${v} · ${SCALE[v - 1].label}` : 'Not rated yet (0)'}</div></div>
           <fieldset class="scale" aria-label="${esc(name)}" data-skill="${esc(name)}">${SCALE.map((x) => `<label title="${x.n} · ${x.label}: ${x.desc}"><input type="radio" name="${keyOf(name)}" value="${x.n}" ${v === x.n ? 'checked' : ''}><span>${x.n}</span></label>`).join('')}</fieldset></div>`;
     const renderList = (id) => {
       const m = c.latest[id] || {};
@@ -1274,8 +1274,9 @@
   window.addEventListener('storage', (e) => { if (e.key === 'tt-color-scheme') $('meta[name="color-scheme"]').content = e.newValue || 'light dark'; });
 
   /* ------------------------------------------------------------------ deleting ratings
-     Every rating is a row in the sheet. Deleting one removes that row; the VA's previous score for
-     the skill (if any) becomes the current one again. */
+     Every rating is a row in the sheet. Deleting a skill's rating removes all of that VA's rows for the
+     skill, so it shows 0 (not rated) instead of falling back to an older score. Deleting a session removes
+     that day's rows by that manager. */
   function deleteRatings(rows, msg) {
     const keys = rows.map((r) => ({ ts: r.ts, personId: r.personId, skill: r.skill }));
     save('deleteRatings', { keys }, () => { const gone = new Set(rows); DB.ratings = DB.ratings.filter((r) => !gone.has(r)); }, msg);
@@ -1284,10 +1285,11 @@
     const p = person(pid);
     const list = DB.ratings.filter((r) => r.personId === pid && r.skill === skill).sort((a, b) => (a.ts < b.ts ? -1 : 1));
     if (!p || !list.length) return;
-    const last = list[list.length - 1], prev = list[list.length - 2];
-    const msg = `Delete ${p.name}'s rating for "${skill}"?\n\nScore ${last.score}/${MAX}, rated by ${last.manager || 'a manager'} on ${fmt(last.ts)}.\n\n` +
-      (prev ? `Their previous score (${prev.score}/${MAX} from ${fmt(prev.ts)}) will show again.` : `"${skill}" will show as not rated.`) + '\n\nThis cannot be undone.';
-    if (confirm(msg)) deleteRatings([last], `Deleted ${skill} rating for ${p.name}`);
+    const last = list[list.length - 1], older = list.length - 1;
+    const msg = `Delete ${p.name}'s rating for "${skill}"?\n\nCurrent score ${last.score}/${MAX}, rated by ${last.manager || 'a manager'} on ${fmt(last.ts)}.` +
+      (older ? `\nThis also removes ${older} earlier rating${older === 1 ? '' : 's'} for this skill.` : '') +
+      `\n\nThe skill goes back to 0 (not rated) and is left out of averages. This cannot be undone.`;
+    if (confirm(msg)) deleteRatings(list, `${skill} reset to 0 for ${p.name}`);
   }
   function deleteSession(pid, day, manager) {
     const p = person(pid);
