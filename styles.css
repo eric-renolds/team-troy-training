@@ -636,3 +636,7 @@ details.group.compact .g-body { padding: 0 0 10px 26px; }
 /* unrated skills show as 0 */
 .skill-row.unrated .skill-name { color: var(--muted); }
 .skill-row.unrated + .skill-row, .skill-row + .skill-row.unrated { border-top: 1px dashed var(--line); }
+
+/* role shown next to names */
+.role-tag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent-ink); background: var(--accent-soft); border-radius: 6px; padding: 1px 6px; vertical-align: 1px; white-space: nowrap; }
+.matrix .rowhead .rl { font-size: 11.5px; color: var(--muted); }

@@ -111,7 +111,12 @@
   const STATUSES = ['Planned', 'In progress', 'Completed'];
   const STATUS_TONE = { Planned: 'tone-info', 'In progress': 'tone-accent', Completed: 'tone-good' };
   const STATUS_BAR = { Planned: 'var(--info)', 'In progress': 'var(--accent)', Completed: 'var(--good)' };
-  const ROLES = ['VA', 'Senior VA', 'Team Lead', 'Account Executive'];
+  const ROLES = ['Junior VA', 'Senior VA', 'Executive VA', 'Jr. AE', 'Senior AE'];
+  const DEFAULT_ROLE = 'Junior VA';
+  // Seniority for sorting and trainer suggestions; older role names still rank sensibly.
+  const ROLE_RANK = { 'Junior VA': 1, VA: 1, 'Senior VA': 2, 'Executive VA': 3, 'Team Lead': 3, 'Jr. AE': 4, 'Account Executive': 5, 'Senior AE': 5 };
+  const roleRank = (r) => ROLE_RANK[r] || 0;
+  const withRole = (p) => (p ? `${p.name} · ${p.role}` : '—');
   const NOTE_TYPES = { Note: 'tone-info', Win: 'tone-good', Concern: 'tone-bad' };
   const OTHER_CAT = 'Other tools';
   const SKILL_CATALOG = {
@@ -135,13 +140,13 @@
     const now = Date.now();
     const at = (d) => new Date(now - d * DAY).toISOString();
     const names = [
-      ['Maria Santos', 'Team Lead', 'Brightline Realty', 8.6], ['Joshua Reyes', 'Senior VA', 'Northwind Health', 8.0],
-      ['Angela Cruz', 'Senior VA', 'Brightline Realty', 7.6], ['Mark Villanueva', 'VA', 'Coastal Legal', 5.8],
-      ['Kristine Bautista', 'VA', 'Northwind Health', 6.4], ['John Paul Garcia', 'VA', 'Summit Ecom', 5.0],
-      ['Patricia Mendoza', 'Senior VA', 'Summit Ecom', 7.8], ['Carlo Ramos', 'VA', 'Coastal Legal', 5.4],
-      ['Bea Navarro', 'VA', 'Brightline Realty', 6.0], ['Miguel Torres', 'VA', 'Northwind Health', 4.8],
-      ['Hannah Dela Cruz', 'VA', 'Summit Ecom', 6.8], ['Rafael Aquino', 'VA', 'Coastal Legal', 4.4],
-      ['Nicole Fernandez', 'VA', 'Brightline Realty', 6.2], ['Ivan Castillo', 'VA', 'Summit Ecom', 4.0],
+      ['Maria Santos', 'Executive VA', 'Brightline Realty', 8.6], ['Joshua Reyes', 'Senior VA', 'Northwind Health', 8.0],
+      ['Angela Cruz', 'Senior VA', 'Brightline Realty', 7.6], ['Mark Villanueva', 'Junior VA', 'Coastal Legal', 5.8],
+      ['Kristine Bautista', 'Junior VA', 'Northwind Health', 6.4], ['John Paul Garcia', 'Junior VA', 'Summit Ecom', 5.0],
+      ['Patricia Mendoza', 'Senior VA', 'Summit Ecom', 7.8], ['Carlo Ramos', 'Junior VA', 'Coastal Legal', 5.4],
+      ['Bea Navarro', 'Junior VA', 'Brightline Realty', 6.0], ['Miguel Torres', 'Junior VA', 'Northwind Health', 4.8],
+      ['Hannah Dela Cruz', 'Junior VA', 'Summit Ecom', 6.8], ['Rafael Aquino', 'Junior VA', 'Coastal Legal', 4.4],
+      ['Nicole Fernandez', 'Junior VA', 'Brightline Realty', 6.2], ['Ivan Castillo', 'Junior VA', 'Summit Ecom', 4.0],
     ];
     const people = names.map(([name, role, account], i) => ({
       id: 'p' + (i + 1), name, role, account, start: isoDay(now - (60 + Math.floor(rnd() * 700)) * DAY), active: 'Y', sample: 'Y',
@@ -300,7 +305,7 @@
       const vals = skills.map((s) => m[s] || 0);
       const lv = vals.reduce((a, b) => a + b, 0) / vals.length;
       const load = c.load[p.id] || 0;
-      return { p, lv, load, fit: lv - 0.7 * load + (p.role !== 'VA' ? 0.3 : 0), min: Math.min(...vals) };
+      return { p, lv, load, fit: lv - 0.7 * load + 0.15 * roleRank(p.role), min: Math.min(...vals) };
     }).filter((x) => x.lv >= TRAINER_AVG && x.min >= TRAINER_MIN).sort((a, b) => b.fit - a.fit).slice(0, 4);
   }
 
@@ -482,7 +487,7 @@
           <div class="card-head"><h2>Trainers</h2><span class="sub">Who is training whom</span><a class="btn btn-ghost btn-sm right" href="#/training/trainers">All trainers ${ic('chevron')}</a></div>
           ${trainers.length ? `<ul class="list">${trainers.slice(0, 5).map((p) => {
             const ts = c.openT.filter((t) => t.trainerId === p.id).map((t) => person(t.traineeId)).filter(Boolean);
-            return `<li>${avatar(p)}<div class="grow"><a class="title" href="#/va/${esc(p.id)}" style="text-decoration:none">${esc(p.name)}</a><div class="meta">${ts.map((x) => esc(x.name)).join(', ')}</div></div><div class="avatar-stack">${ts.slice(0, 4).map((x) => avatar(x, 'sm')).join('')}</div><span class="pill plain tone-accent">${ts.length} trainee${ts.length === 1 ? '' : 's'}</span></li>`;
+            return `<li>${avatar(p)}<div class="grow"><a class="title" href="#/va/${esc(p.id)}" style="text-decoration:none">${esc(p.name)}</a> <span class="role-tag">${esc(p.role)}</span><div class="meta">${ts.map((x) => esc(x.name)).join(', ')}</div></div><div class="avatar-stack">${ts.slice(0, 4).map((x) => avatar(x, 'sm')).join('')}</div><span class="pill plain tone-accent">${ts.length} trainee${ts.length === 1 ? '' : 's'}</span></li>`;
           }).join('')}</ul>` : '<div class="empty"><b>No trainers yet</b>Assign one from a VA\'s profile.</div>'}
         </section>
         <section class="card">
@@ -525,6 +530,7 @@
       high: (a, b) => (c.avg[b.id] || 0) - (c.avg[a.id] || 0),
       low: (a, b) => (c.avg[a.id] || 9) - (c.avg[b.id] || 9),
       rated: (a, b) => daysSince(c.last[b.id]) - daysSince(c.last[a.id]),
+      role: (a, b) => roleRank(b.role) - roleRank(a.role) || a.name.localeCompare(b.name),
     };
     return rows.sort(by[ui.teamSort] || by.name);
   }
@@ -564,7 +570,7 @@
         <label class="search-field">${ic('search')}<span class="sr-only">Search team</span><input class="input" id="team-q" type="search" placeholder="Search by name or account" value="${esc(ui.teamQuery)}"></label>
         <div class="filters" role="group" aria-label="Filter">${f.map(([k, l, n]) => `<button class="filter" data-act="team-filter" data-id="${k}" aria-pressed="${ui.teamFilter === k}">${l}<span class="n">${n}</span></button>`).join('')}</div>
         <label style="margin-left:auto" class="nowrap"><span class="sr-only">Sort</span><select class="select" id="team-sort">
-          ${[['name', 'Name A–Z'], ['low', 'Lowest skill first'], ['high', 'Highest skill first'], ['rated', 'Longest since rated']].map(([k, l]) => `<option value="${k}" ${ui.teamSort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          ${[['name', 'Name A–Z'], ['low', 'Lowest skill first'], ['high', 'Highest skill first'], ['rated', 'Longest since rated'], ['role', 'Role (most senior first)']].map(([k, l]) => `<option value="${k}" ${ui.teamSort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       </div>
       <section class="card" id="team-table">${teamTable()}</section>`;
     return {
@@ -710,7 +716,7 @@
     const curAvg = cur.length ? cur.reduce((x, y) => x + y, 0) / cur.length : 0;
     const pct = Math.min(100, Math.round((curAvg / t.target) * 100));
     return `<article class="tcard" data-act="open-training" data-id="${esc(t.id)}" tabindex="0">
-      <div class="pair">${avatar(a)}<div class="who"><b>${esc(a ? a.name : '—')}</b><span>trained by ${esc(b ? b.name : '—')}</span></div></div>
+      <div class="pair">${avatar(a)}<div class="who"><b>${esc(a ? a.name : '—')} <span class="role-tag">${esc(a ? a.role : '')}</span></b><span>trained by ${esc(b ? withRole(b) : '—')}</span></div></div>
       <div class="chips">${t.skills.map((s) => `<span class="chip">${badge(m[s])} ${esc(s)}</span>`).join('')}</div>
       <div><div class="meter"><div class="meter-track"><div class="meter-fill" style="width:${pct}%;background:var(--accent)"></div></div><span class="muted" style="font-size:12px;white-space:nowrap">${curAvg ? one(curAvg) + ' → ' + t.target : 'Not rated yet · target ' + t.target}</span></div></div>
       <div class="tfoot">${ic('clock').replace('<svg', '<svg style="width:14px;height:14px"')}<span style="${isOverdue(t) ? 'color:var(--bad);font-weight:600' : ''}">${t.status === 'Completed' ? 'Completed' : (isOverdue(t) ? 'Overdue · ' : 'Due ') + fmtShort(t.due)}</span><span class="right">${avatar(b, 'sm')}</span></div>
@@ -736,7 +742,7 @@
         ? cats.map((k) => { const v = catAvg(p.id, k); return `<td class="cell"><button class="sc${lvl(v)}" data-act="mx-cat" data-id="${esc(k)}" aria-label="${esc(p.name)}, ${esc(k)}: ${v ? one(v) : 'not rated'}">${v ? one(v) : '0'}</button></td>`; }).join('')
         : skills.map((s) => `<td class="cell"><button class="sc${lvl(m[s.name])}" data-act="rate" data-id="${esc(p.id)}" data-cat="${esc(ui.matrixCat)}" aria-label="${esc(p.name)}, ${esc(s.name)}: ${m[s.name] || 'not rated'}">${m[s.name] || '0'}</button></td>`).join('');
       const avg = overview ? c.avg[p.id] : catAvg(p.id, ui.matrixCat);
-      return `<tr><th class="rowhead" scope="row"><a class="person" href="#/va/${esc(p.id)}" style="text-decoration:none">${avatar(p, 'sm')}<span class="nm" style="font-weight:600">${esc(p.name)}</span></a></th>${cells}<td class="cell">${badge(avg, true)}</td></tr>`;
+      return `<tr><th class="rowhead" scope="row"><a class="person" href="#/va/${esc(p.id)}" style="text-decoration:none">${avatar(p, 'sm')}<span><span class="nm" style="font-weight:600;display:block">${esc(p.name)}</span><span class="rl">${esc(p.role)}</span></span></a></th>${cells}<td class="cell">${badge(avg, true)}</td></tr>`;
     }).join('');
     const foot = overview
       ? cats.map((k) => `<td><span class="score-badge sc${lvl(teamCat(k))}">${teamCat(k) != null ? one(teamCat(k)) : '0'}</span></td>`).join('') + `<td>${badge(c.team, true)}</td>`
@@ -919,7 +925,7 @@
     if (onMount) onMount(d, form);
     return d;
   }
-  const personOptions = (sel, exclude) => activePeople().filter((p) => p.id !== exclude).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const personOptions = (sel, exclude) => activePeople().filter((p) => p.id !== exclude).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(withRole(p))}</option>`).join('');
 
   function rateDialog(pid, openCat) {
     const c = derive();
@@ -1039,7 +1045,7 @@
       const list = suggestTrainers(tid, skills);
       if (!tid || !skills.length) return '<div class="muted">Choose a trainee and at least one focus skill to see suggested trainers.</div>';
       if (!list.length) return `<div class="muted">No one averages ${TRAINER_AVG}+ (with no skill under ${TRAINER_MIN}) on these skills yet — pick a trainer below.</div>`;
-      return list.map((x, i) => `<label><input type="radio" name="suggested" value="${esc(x.p.id)}" ${current === x.p.id || (!current && i === 0) ? 'checked' : ''}>${avatar(x.p)}<div class="grow"><div style="font-weight:600">${esc(x.p.name)} ${i === 0 ? '<span class="best">· Best match</span>' : ''}</div><div class="why">Level ${one(x.lv)} in ${skills.length === 1 ? esc(skills[0]) : 'these skills'} · training ${x.load} VA${x.load === 1 ? '' : 's'} now</div></div>${badge(x.lv, true)}</label>`).join('');
+      return list.map((x, i) => `<label><input type="radio" name="suggested" value="${esc(x.p.id)}" ${current === x.p.id || (!current && i === 0) ? 'checked' : ''}>${avatar(x.p)}<div class="grow"><div style="font-weight:600">${esc(x.p.name)} ${i === 0 ? '<span class="best">· Best match</span>' : ''}</div><div class="why">${esc(x.p.role)} · level ${one(x.lv)} in ${skills.length === 1 ? esc(skills[0]) : 'these skills'} · training ${x.load} VA${x.load === 1 ? '' : 's'} now</div></div>${badge(x.lv, true)}</label>`).join('');
     };
     modal({
       title: t ? 'Training' : 'New training', sub: t ? `Started ${fmt(t.start)}` : 'Choose a trainee, what they need to learn, and who will train them.', wide: true, submit: t ? 'Save changes' : 'Assign trainer',
@@ -1110,7 +1116,7 @@
       title: p ? 'Edit VA' : 'Add VA', submit: p ? 'Save' : 'Add VA',
       danger: p ? { label: 'Remove VA', confirm: `Remove ${p.name} from the team?\n\nThis deletes their ratings, notes and trainings for good. To keep their history, set Status to Inactive instead.`, run: () => removePerson(p.id) } : null,
       body: `<label class="field"><span>Full name</span><input class="input" name="name" required value="${esc(p ? p.name : '')}" autocomplete="off"></label>
-        <div class="row2"><label class="field"><span>Role</span><select class="select" name="role">${ROLES.map((r) => `<option ${(p ? p.role : 'VA') === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+        <div class="row2"><label class="field"><span>Role</span><select class="select" name="role">${(p && !ROLES.includes(p.role) ? [p.role].concat(ROLES) : ROLES).map((r) => `<option ${(p ? p.role : DEFAULT_ROLE) === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
           <label class="field"><span>Client / account</span><input class="input" name="account" value="${esc(p ? p.account : '')}"></label></div>
         <div class="row2"><label class="field"><span>Start date</span><input class="input" type="date" name="start" value="${esc(p ? p.start : isoDay(new Date()))}"></label>
           <label class="field"><span>Status</span><select class="select" name="active"><option value="Y" ${!p || p.active !== 'N' ? 'selected' : ''}>Active</option><option value="N" ${p && p.active === 'N' ? 'selected' : ''}>Inactive</option></select></label></div>`,
@@ -1171,7 +1177,7 @@
       const ac = actions.filter(([l]) => !q || l.toLowerCase().includes(q));
       items = [];
       let html = '';
-      if (ppl.length) { html += '<li class="palette-group" role="presentation">VAs</li>'; ppl.forEach((p) => { items.push(() => { location.hash = '#/va/' + p.id; }); html += `<li role="option" data-i="${items.length - 1}">${avatar(p, 'sm')}<span>${esc(p.name)}</span><span class="k">${esc(p.account || p.role)}</span></li>`; }); }
+      if (ppl.length) { html += '<li class="palette-group" role="presentation">VAs</li>'; ppl.forEach((p) => { items.push(() => { location.hash = '#/va/' + p.id; }); html += `<li role="option" data-i="${items.length - 1}">${avatar(p, 'sm')}<span>${esc(p.name)}</span><span class="k">${esc(p.role)}${p.account ? ' · ' + esc(p.account) : ''}</span></li>`; }); }
       if (ac.length) { html += '<li class="palette-group" role="presentation">Actions</li>'; ac.forEach(([l, fn]) => { items.push(fn); html += `<li role="option" data-i="${items.length - 1}"><span class="dot-icon tone-accent" style="width:26px;height:26px">${ic('plus')}</span><span>${l}</span></li>`; }); }
       if (pg.length) { html += '<li class="palette-group" role="presentation">Pages</li>'; pg.forEach(([l, h]) => { items.push(() => { location.hash = h; }); html += `<li role="option" data-i="${items.length - 1}"><span class="dot-icon tone-info" style="width:26px;height:26px">${ic('chevron')}</span><span>${l}</span></li>`; }); }
       list.innerHTML = html || '<li class="palette-group">No results</li>';
