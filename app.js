@@ -74,7 +74,8 @@
   };
   const agoTime = (v) => { const m = Math.floor((Date.now() - new Date(v)) / 60000); if (!(m >= 0)) return ago(v); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; if (m < 720) return Math.floor(m / 60) + ' h ago'; return ago(v); };
   const one = (n) => (n == null || isNaN(n) ? '—' : (Math.round(n * 10) / 10).toFixed(1));
-  const lvl = (n) => (n == null || isNaN(n) ? 0 : Math.max(1, Math.min(5, Math.round(n))));
+  const MAX = 10; // rating scale is 1–10
+  const lvl = (n) => (n == null || isNaN(n) ? 0 : Math.max(1, Math.min(MAX, Math.round(n))));
   const initials = (n) => String(n || '?').trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   const AV = ['#1E3058', '#8A5E1F', '#2F6B5A', '#6B3F6E', '#2C5C9A', '#9A4A35', '#4F5D2F', '#3D4C7A', '#7A5A2C', '#355E6E'];
   const avColor = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
@@ -84,17 +85,28 @@
     if (Math.abs(d) < 0.05) return '<span class="delta flat">±0.0</span>';
     return d > 0 ? `<span class="delta up">▲ ${one(d)}</span>` : `<span class="delta down">▼ ${one(-d)}</span>`;
   };
-  const meter = (v) => `<div class="meter"><div class="meter-track"><div class="meter-fill" style="width:${v ? (v / 5) * 100 : 0}%;background:var(--bar${lvl(v) || 1})"></div></div><span class="meter-val">${one(v)}</span></div>`;
-  const segs = (v) => `<div class="segs" aria-label="${v || 0} out of 5">${[1, 2, 3, 4, 5].map((i) => `<i style="${v && i <= v ? `background:var(--bar${v})` : ''}"></i>`).join('')}</div>`;
+  const meter = (v) => `<div class="meter"><div class="meter-track"><div class="meter-fill" style="width:${v ? (v / MAX) * 100 : 0}%;background:var(--bar${lvl(v) || 1})"></div></div><span class="meter-val">${one(v)}</span></div>`;
+  const segs = (v) => `<div class="segs" aria-label="${v || 0} out of ${MAX}">${Array.from({ length: MAX }, (_, k) => k + 1).map((i) => `<i style="${v && i <= v ? `background:var(--bar${lvl(v)})` : ''}"></i>`).join('')}</div>`;
   const badge = (v, dec) => `<span class="score-badge sc${lvl(v)}">${v ? (dec ? one(v) : Number.isInteger(v) ? v : one(v)) : '–'}</span>`;
 
   const SCALE = [
-    { n: 1, label: 'Beginner', desc: 'little or no experience' },
-    { n: 2, label: 'Basic', desc: 'simple tasks with help' },
-    { n: 3, label: 'Competent', desc: 'works on their own' },
-    { n: 4, label: 'Strong', desc: 'handles complex work' },
-    { n: 5, label: 'Expert', desc: 'can teach others' },
+    { n: 1, label: 'Beginner', desc: 'no experience yet' },
+    { n: 2, label: 'Novice', desc: 'knows the basics in theory' },
+    { n: 3, label: 'Learning', desc: 'simple tasks with close help' },
+    { n: 4, label: 'Developing', desc: 'simple tasks with some help' },
+    { n: 5, label: 'Capable', desc: 'routine tasks, occasional help' },
+    { n: 6, label: 'Competent', desc: 'works on their own' },
+    { n: 7, label: 'Proficient', desc: 'reliable on most work' },
+    { n: 8, label: 'Strong', desc: 'handles complex work' },
+    { n: 9, label: 'Advanced', desc: 'the go-to person on the team' },
+    { n: 10, label: 'Expert', desc: 'can teach others' },
   ];
+  // Thresholds on the 1–10 scale
+  const WEAK = 4;          // at or below: a skill gap
+  const TRAINER_AVG = 7;   // suggested trainers: average on the chosen skills…
+  const TRAINER_MIN = 6;   // …and no chosen skill below this
+  const FOCUS = 6;         // at or below: pre-selected as a training focus
+  const TARGETS = [6, 7, 8, 9, 10], DEFAULT_TARGET = 8;
   const STATUSES = ['Planned', 'In progress', 'Completed'];
   const STATUS_TONE = { Planned: 'tone-info', 'In progress': 'tone-accent', Completed: 'tone-good' };
   const STATUS_BAR = { Planned: 'var(--info)', 'In progress': 'var(--accent)', Completed: 'var(--good)' };
@@ -122,13 +134,13 @@
     const now = Date.now();
     const at = (d) => new Date(now - d * DAY).toISOString();
     const names = [
-      ['Maria Santos', 'Team Lead', 'Brightline Realty', 4.3], ['Joshua Reyes', 'Senior VA', 'Northwind Health', 4.0],
-      ['Angela Cruz', 'Senior VA', 'Brightline Realty', 3.8], ['Mark Villanueva', 'VA', 'Coastal Legal', 2.9],
-      ['Kristine Bautista', 'VA', 'Northwind Health', 3.2], ['John Paul Garcia', 'VA', 'Summit Ecom', 2.5],
-      ['Patricia Mendoza', 'Senior VA', 'Summit Ecom', 3.9], ['Carlo Ramos', 'VA', 'Coastal Legal', 2.7],
-      ['Bea Navarro', 'VA', 'Brightline Realty', 3.0], ['Miguel Torres', 'VA', 'Northwind Health', 2.4],
-      ['Hannah Dela Cruz', 'VA', 'Summit Ecom', 3.4], ['Rafael Aquino', 'VA', 'Coastal Legal', 2.2],
-      ['Nicole Fernandez', 'VA', 'Brightline Realty', 3.1], ['Ivan Castillo', 'VA', 'Summit Ecom', 2.0],
+      ['Maria Santos', 'Team Lead', 'Brightline Realty', 8.6], ['Joshua Reyes', 'Senior VA', 'Northwind Health', 8.0],
+      ['Angela Cruz', 'Senior VA', 'Brightline Realty', 7.6], ['Mark Villanueva', 'VA', 'Coastal Legal', 5.8],
+      ['Kristine Bautista', 'VA', 'Northwind Health', 6.4], ['John Paul Garcia', 'VA', 'Summit Ecom', 5.0],
+      ['Patricia Mendoza', 'Senior VA', 'Summit Ecom', 7.8], ['Carlo Ramos', 'VA', 'Coastal Legal', 5.4],
+      ['Bea Navarro', 'VA', 'Brightline Realty', 6.0], ['Miguel Torres', 'VA', 'Northwind Health', 4.8],
+      ['Hannah Dela Cruz', 'VA', 'Summit Ecom', 6.8], ['Rafael Aquino', 'VA', 'Coastal Legal', 4.4],
+      ['Nicole Fernandez', 'VA', 'Brightline Realty', 6.2], ['Ivan Castillo', 'VA', 'Summit Ecom', 4.0],
     ];
     const people = names.map(([name, role, account], i) => ({
       id: 'p' + (i + 1), name, role, account, start: isoDay(now - (60 + Math.floor(rnd() * 700)) * DAY), active: 'Y', sample: 'Y',
@@ -139,20 +151,20 @@
     people.forEach((p, i) => {
       if (i === 13) return; // newest VA, not rated yet
       const base = names[i][3];
-      const offs = skills.map(() => (rnd() - 0.5) * 2.6);
+      const offs = skills.map(() => (rnd() - 0.5) * 5.2);
       const sessions = i === 9 || i === 11 ? [150, 72] : [125, 62, 4 + Math.floor(rnd() * 20)];
       sessions.forEach((d, si) => {
-        const growth = si * (0.15 + rnd() * 0.25);
-        const jitter = skills.map(() => (rnd() < 0.3 ? si * 0.7 : 0));
+        const growth = si * (0.3 + rnd() * 0.5);
+        const jitter = skills.map(() => (rnd() < 0.3 ? si * 1.4 : 0));
         const m = managers[(i + si) % 2];
         skills.forEach((s, k) => {
-          const score = Math.max(1, Math.min(5, Math.round(base + offs[k] + growth + jitter[k] - 0.3)));
+          const score = Math.max(1, Math.min(MAX, Math.round(base + offs[k] + growth + jitter[k] - 0.6)));
           ratings.push({ ts: at(d), personId: p.id, skill: s.name, score, manager: m, note: '', sample: 'Y' });
         });
       });
     });
     const T = (trainee, trainer, sk, status, startAgo, dueIn, target) => ({
-      id: 't' + uid(), traineeId: trainee, trainerId: trainer, skills: sk, target: target || 4, status,
+      id: 't' + uid(), traineeId: trainee, trainerId: trainer, skills: sk, target: target || DEFAULT_TARGET, status,
       start: isoDay(now - startAgo * DAY), due: isoDay(now + dueIn * DAY), notes: '', created: at(startAgo), updated: at(Math.max(0, startAgo - 3)), sample: 'Y',
     });
     const training = [
@@ -162,8 +174,8 @@
       T('p10', 'p7', ['Time Management', 'Attention to Detail'], 'In progress', 14, 16),
       T('p12', 'p3', ['Google Workspace', 'Calendar & Scheduling'], 'Planned', 1, 30),
       T('p9', 'p2', ['Problem Solving'], 'Completed', 60, -20),
-      T('p5', 'p11', ['Social Media Management'], 'In progress', 10, 20, 3),
-      T('p14', 'p11', ['Email Management', 'Google Workspace'], 'Planned', 0, 21, 3),
+      T('p5', 'p11', ['Social Media Management'], 'In progress', 10, 20, 7),
+      T('p14', 'p11', ['Email Management', 'Google Workspace'], 'Planned', 0, 21, 7),
     ];
     const N = (pid, d, type, text, m) => ({ id: 'n' + uid(), personId: pid, ts: at(d), type, text, manager: m || managers[0], sample: 'Y' });
     const notes = [
@@ -196,8 +208,8 @@
   function normalise(d) {
     d.people = (d.people || []).map((p) => Object.assign({ role: 'VA', account: '', active: 'Y' }, p));
     d.skills = d.skills || [];
-    d.ratings = (d.ratings || []).map((r) => Object.assign({}, r, { score: Number(r.score) })).filter((r) => r.score >= 1 && r.score <= 5);
-    d.training = (d.training || []).map((t) => Object.assign({}, t, { skills: Array.isArray(t.skills) ? t.skills : String(t.skills || '').split(/\s*;\s*/).filter(Boolean), target: Number(t.target) || 4 }));
+    d.ratings = (d.ratings || []).map((r) => Object.assign({}, r, { score: Number(r.score) })).filter((r) => r.score >= 1 && r.score <= MAX);
+    d.training = (d.training || []).map((t) => Object.assign({}, t, { skills: Array.isArray(t.skills) ? t.skills : String(t.skills || '').split(/\s*;\s*/).filter(Boolean), target: Number(t.target) || DEFAULT_TARGET }));
     d.notes = d.notes || [];
     d.teamNotes = (d.teamNotes || []).map((n) => Object.assign({}, n, { pinned: n.pinned === true || n.pinned === 'Y' }));
     d.settings = Object.assign({ teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers: [] }, d.settings || {});
@@ -272,7 +284,7 @@
     });
     activePeople().forEach((p) => {
       const covered = new Set((c.asTrainee[p.id] || []).filter((t) => t.status !== 'Completed').flatMap((t) => t.skills));
-      const gaps = weakSkillsRaw(c, p.id).filter((x) => x.v <= 2 && !covered.has(x.name));
+      const gaps = weakSkillsRaw(c, p.id).filter((x) => x.v <= WEAK && !covered.has(x.name));
       if (gaps.length >= 2) out.push({ kind: 'gap', pid: p.id, tone: 'tone-accent', icon: 'target', title: `${p.name} has ${gaps.length} weak skills not covered by training`, meta: gaps.slice(0, 3).map((g) => g.name).join(', ') + (gaps.length > 3 ? '…' : ''), action: 'assign', label: 'Assign trainer', w: 1 });
     });
     return out.sort((a, b) => b.w - a.w);
@@ -287,8 +299,8 @@
       const vals = skills.map((s) => m[s] || 0);
       const lv = vals.reduce((a, b) => a + b, 0) / vals.length;
       const load = c.load[p.id] || 0;
-      return { p, lv, load, fit: lv - 0.35 * load + (p.role !== 'VA' ? 0.15 : 0), min: Math.min(...vals) };
-    }).filter((x) => x.lv >= 3.5 && x.min >= 3).sort((a, b) => b.fit - a.fit).slice(0, 4);
+      return { p, lv, load, fit: lv - 0.7 * load + (p.role !== 'VA' ? 0.3 : 0), min: Math.min(...vals) };
+    }).filter((x) => x.lv >= TRAINER_AVG && x.min >= TRAINER_MIN).sort((a, b) => b.fit - a.fit).slice(0, 4);
   }
 
   /* ------------------------------------------------------------------ API */
@@ -444,7 +456,7 @@
       </section>
       <div class="grid grid-4" style="margin-bottom:20px">
         ${kpi('team', 'Active VAs', ap.length, `${ap.filter((p) => c.load[p.id]).length} currently training others`)}
-        ${kpi('chart', 'Team skill level', `${one(c.team)} <small>/ 5</small>`, `${deltaHtml(c.team != null && c.teamPrev != null ? c.team - c.teamPrev : null)} since previous ratings`)}
+        ${kpi('chart', 'Team skill level', `${one(c.team)} <small>/ 10</small>`, `${deltaHtml(c.team != null && c.teamPrev != null ? c.team - c.teamPrev : null)} since previous ratings`)}
         ${kpi('training', 'Active trainings', c.openT.length, overdue ? `<span style="color:var(--bad);font-weight:600">${overdue} overdue</span>` : 'All on schedule')}
         ${kpi('clock', 'Due for rating', due, `Re-rate every ${DB.settings.reassessDays} days`)}
       </div>
@@ -638,10 +650,10 @@
     const W = 520, H = 200, L = 30, R = 12, T = 12, B = 28;
     const t0 = new Date(pts[0].ts).getTime(), t1 = new Date(pts[pts.length - 1].ts).getTime() || t0 + 1;
     const x = (t) => L + ((new Date(t).getTime() - t0) / (t1 - t0 || 1)) * (W - L - R);
-    const y = (v) => T + (1 - (v - 1) / 4) * (H - T - B);
+    const y = (v) => T + (1 - (v - 1) / (MAX - 1)) * (H - T - B);
     const d = pts.map((s, i) => `${i ? 'L' : 'M'}${x(s.ts).toFixed(1)},${y(s.avg).toFixed(1)}`).join(' ');
     return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Skill level over time">
-      ${[1, 2, 3, 4, 5].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" ${v === 1 ? '' : 'stroke-dasharray="3 4"'}/><text x="${L - 10}" y="${y(v) + 4}" font-size="11" text-anchor="end" fill="var(--muted)">${v}</text>`).join('')}
+      ${[1, 4, 7, 10].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" ${v === 1 ? '' : 'stroke-dasharray="3 4"'}/><text x="${L - 10}" y="${y(v) + 4}" font-size="11" text-anchor="end" fill="var(--muted)">${v}</text>`).join('')}
       <path d="${d} L${x(pts[pts.length - 1].ts)},${y(1)} L${x(pts[0].ts)},${y(1)} Z" fill="var(--accent)" opacity=".1"/>
       <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>
       ${pts.map((s) => `<circle cx="${x(s.ts)}" cy="${y(s.avg)}" r="4.5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.5"><title>${fmt(s.ts)}: ${one(s.avg)}</title></circle><text x="${x(s.ts)}" y="${H - 8}" font-size="11" text-anchor="middle" fill="var(--muted)">${fmtShort(s.ts)}</text>`).join('')}
@@ -663,7 +675,7 @@
       }).join('')}</div>`;
     } else {
       const trainers = activePeople().filter((p) => (c.asTrainer[p.id] || []).length).sort((a, b) => (c.load[b.id] || 0) - (c.load[a.id] || 0));
-      const candidates = activePeople().filter((p) => !(c.asTrainer[p.id] || []).length && (c.avg[p.id] || 0) >= 3.6).sort((a, b) => c.avg[b.id] - c.avg[a.id]);
+      const candidates = activePeople().filter((p) => !(c.asTrainer[p.id] || []).length && (c.avg[p.id] || 0) >= TRAINER_AVG).sort((a, b) => c.avg[b.id] - c.avg[a.id]);
       content = `<div class="grid grid-2e" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${trainers.map((p) => {
         const open = (c.asTrainer[p.id] || []).filter((t) => t.status !== 'Completed');
         const done = (c.asTrainer[p.id] || []).length - open.length;
@@ -730,7 +742,7 @@
       : skills.map((s) => `<td><span class="score-badge sc${lvl(c.skillAvg[s.name])}">${one(c.skillAvg[s.name])}</span></td>`).join('') + `<td>${badge(teamCat(ui.matrixCat), true)}</td>`;
     const body = `
       <div class="page-head"><div><h1>Skill matrix</h1><p>${overview ? 'Average level per category. Click a category to see its skills.' : 'Every VA against every skill in this category. Click a cell to update a rating.'}</p></div>
-        <div class="actions"><div class="legend">${SCALE.map((s) => `<span><i class="sc${s.n}"></i>${s.n} ${s.label}</span>`).join('')}</div></div></div>
+        <div class="actions"><div class="legend-10"><span>${SCALE[0].label}</span><span class="ramp">${SCALE.map((s) => `<i class="sc${s.n}" title="${s.n} · ${s.label}: ${s.desc}">${s.n}</i>`).join('')}</span><span>${SCALE[MAX - 1].label}</span></div></div></div>
       <div class="toolbar">
         <label class="search-field">${ic('search')}<span class="sr-only">Search VAs</span><input class="input" id="mx-q" type="search" placeholder="Filter VAs" value="${esc(ui.matrixQuery)}"></label>
       </div>
@@ -938,7 +950,7 @@
       body: `<div class="row2"><label class="field"><span>VA</span><select class="select" name="pid" ${pid ? 'disabled' : ''}>${personOptions(firstPid)}</select></label>
         <label class="field"><span>Date</span><input class="input" type="date" name="date" value="${isoDay(new Date())}" max="${isoDay(new Date())}"></label></div>
         <div class="rate-tools"><label class="search-field" style="flex:1;width:auto">${ic('search')}<span class="sr-only">Find a skill</span><input class="input" id="rate-q" type="search" placeholder="Find a skill…" autocomplete="off"></label>
-          <details class="scale-help"><summary>What do 1–5 mean?</summary><div class="scale-key">${SCALE.map((x) => `<span><b>${x.n}</b> ${x.label} — ${x.desc}</span>`).join('')}</div></details></div>
+          <details class="scale-help"><summary>What do 1–10 mean?</summary><div class="scale-key">${SCALE.map((x) => `<span><b>${x.n}</b> ${x.label} — ${x.desc}</span>`).join('')}</div></details></div>
         <div class="rate-list" id="rate-list">${renderList(firstPid)}</div>
         <label class="field"><span>Note <span class="muted" style="font-weight:400">(optional)</span></span><textarea class="textarea" name="note" placeholder="Anything worth remembering about this rating?"></textarea></label>`,
       onMount(d, form) {
@@ -1019,13 +1031,13 @@
     const t = opts.id ? DB.training.find((x) => x.id === opts.id) : null;
     const traineeId = t ? t.traineeId : opts.traineeId || '';
     const trainerPre = t ? t.trainerId : opts.trainerId || '';
-    const defaultSkills = (id) => weakSkills(id).filter((s) => s.v <= 3).slice(0, 2).map((s) => s.name);
+    const defaultSkills = (id) => weakSkills(id).filter((s) => s.v <= FOCUS).slice(0, 2).map((s) => s.name);
     const chosen = t ? t.skills : traineeId ? defaultSkills(traineeId) : [];
     const skillChips = (sel, id) => { const m = c.latest[id] || {}; return categories().map((cat) => { const list = skillsIn(cat); const n = list.filter((s) => sel.includes(s.name)).length; return `<details class="group compact" data-cat="${esc(cat)}" ${n ? 'open' : ''}><summary>${chev}<span class="g-name">${esc(cat)}</span><span class="g-meta" data-count>${n ? n + ' selected' : ''}</span></summary><div class="check-chips g-body">${list.map((s) => `<label data-name="${esc(s.name.toLowerCase())}"><input type="checkbox" name="skills" value="${esc(s.name)}" ${sel.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)}${m[s.name] ? ` <b style="opacity:.6">${m[s.name]}</b>` : ''}</span></label>`).join('')}</div></details>`; }).join(''); };
     const suggestHtml = (tid, skills, current) => {
       const list = suggestTrainers(tid, skills);
       if (!tid || !skills.length) return '<div class="muted">Choose a trainee and at least one focus skill to see suggested trainers.</div>';
-      if (!list.length) return '<div class="muted">No one is rated 3.5+ on all of these skills yet — pick a trainer below.</div>';
+      if (!list.length) return `<div class="muted">No one averages ${TRAINER_AVG}+ (with no skill under ${TRAINER_MIN}) on these skills yet — pick a trainer below.</div>`;
       return list.map((x, i) => `<label><input type="radio" name="suggested" value="${esc(x.p.id)}" ${current === x.p.id || (!current && i === 0) ? 'checked' : ''}>${avatar(x.p)}<div class="grow"><div style="font-weight:600">${esc(x.p.name)} ${i === 0 ? '<span class="best">· Best match</span>' : ''}</div><div class="why">Level ${one(x.lv)} in ${skills.length === 1 ? esc(skills[0]) : 'these skills'} · training ${x.load} VA${x.load === 1 ? '' : 's'} now</div></div>${badge(x.lv, true)}</label>`).join('');
     };
     modal({
@@ -1037,7 +1049,7 @@
           <div class="skill-picker" id="tr-skills">${skillChips(chosen, traineeId)}</div></div>
         <div class="field"><span>Suggested trainers</span><div class="suggest" id="tr-suggest">${suggestHtml(traineeId, chosen, trainerPre)}</div></div>
         <label class="field"><span>Or choose any trainer</span><select class="select" name="trainerOther"><option value="">— Use the suggestion above —</option>${personOptions(trainerPre, traineeId)}</select></label>
-        <div class="row3"><label class="field"><span>Target level</span><select class="select" name="target">${[3, 4, 5].map((n) => `<option value="${n}" ${(t ? t.target : 4) === n ? 'selected' : ''}>${n} · ${SCALE[n - 1].label}</option>`).join('')}</select></label>
+        <div class="row3"><label class="field"><span>Target level</span><select class="select" name="target">${TARGETS.map((n) => `<option value="${n}" ${(t ? t.target : DEFAULT_TARGET) === n ? 'selected' : ''}>${n} · ${SCALE[n - 1].label}</option>`).join('')}</select></label>
           <label class="field"><span>Start</span><input class="input" type="date" name="start" value="${esc(t ? t.start : isoDay(new Date()))}"></label>
           <label class="field"><span>Due</span><input class="input" type="date" name="due" value="${esc(t ? t.due : isoDay(Date.now() + 28 * DAY))}"></label></div>
         <label class="field"><span>Status</span><select class="select" name="status">${STATUSES.map((s) => `<option ${(t ? t.status : 'Planned') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>

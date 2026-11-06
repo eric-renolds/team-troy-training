@@ -104,7 +104,7 @@ function doPost(e) {
     return json_({ ok: false, error: 'Incorrect password' });
   }
   try {
-    if (req.action === 'getAll') return json_({ ok: true, data: getAll_(), rev: rev_() });
+    if (req.action === 'getAll') { ensureScale10_(); return json_({ ok: true, data: getAll_(), rev: rev_() }); }
     if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
@@ -144,7 +144,7 @@ function getAll_() {
     people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
     skills: read_('skills').map((s) => ({ name: s.Skill, category: s.Category || 'Other', active: String(s.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
     ratings: read_('ratings').map((r) => ({ ts: r.Timestamp, personId: r['Person ID'], skill: r.Skill, score: Number(r.Score), manager: r.Manager, note: r.Note })),
-    training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 4, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
+    training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 8, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
     notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
     teamNotes: read_('teamNotes').map((n) => ({ id: n.ID, ts: n.Date, manager: n.Manager, text: n.Note, pinned: String(n.Pinned || '').toUpperCase() === 'Y', edited: n.Edited })),
     settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: String(s.managers || '').split(/\s*[,;\n]\s*/).filter(String) }; })(),
@@ -162,7 +162,7 @@ function personRow_(p) {
 
 function saveRatings_(rows, note) {
   const team = {}; read_('team').forEach((p) => (team[p.ID] = p.Name));
-  const out = rows.filter((r) => team[r.personId] && Number(r.score) >= 1 && Number(r.score) <= 5)
+  const out = rows.filter((r) => team[r.personId] && Number(r.score) >= 1 && Number(r.score) <= 10)
     .map((r) => [r.ts || new Date().toISOString(), r.personId, team[r.personId], r.skill, Number(r.score), r.manager || '', r.note || '']);
   if (!out.length) return;
   const sh = sheet_('ratings');
@@ -176,7 +176,7 @@ function trainingRow_(t) {
   const now = new Date().toISOString();
   return {
     ID: t.id || id_('t'), 'Trainee ID': t.traineeId, Trainee: nameOf_(t.traineeId), 'Trainer ID': t.trainerId, Trainer: nameOf_(t.trainerId),
-    Skills: (t.skills || []).join('; '), Target: Number(t.target) || 4, Start: t.start || '', Due: t.due || '', Status: t.status || 'Planned',
+    Skills: (t.skills || []).join('; '), Target: Number(t.target) || 8, Start: t.start || '', Due: t.due || '', Status: t.status || 'Planned',
     Notes: t.notes || '', Created: t.created || now, Updated: now,
   };
 }
@@ -228,6 +228,39 @@ function teamNoteRow_(n, manager) {
     ID: n.id || id_('m'), Date: old ? old.Date : (n.ts || new Date().toISOString()), Manager: old ? old.Manager : (n.manager || manager || ''),
     Note: String(n.text).trim(), Pinned: n.pinned ? 'Y' : '', Edited: old && String(old.Note) !== String(n.text).trim() ? new Date().toISOString() : (old ? old.Edited : ''),
   };
+}
+
+/* ============================== 1–10 scale switch ============================== */
+// Ratings are out of 10. The first time the new version loads, ratings made on the old 1–5 scale
+// are moved to a "Skill Ratings (old 1-5)" tab (kept, not deleted) so everyone starts fresh,
+// and training targets set on the old scale are doubled. Runs once.
+const OLD_RATINGS_TAB = 'Skill Ratings (old 1-5)';
+function ensureScale10_() {
+  if (String(readSettings_().scale || '') === '10') return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    if (String(readSettings_().scale || '') === '10') return;
+    const ss = ss_(), sh = sheet_('ratings'), last = sh.getLastRow(), w = TABS.ratings.headers.length;
+    if (last > 1) {
+      let arch = ss.getSheetByName(OLD_RATINGS_TAB);
+      if (!arch) {
+        arch = ss.insertSheet(OLD_RATINGS_TAB);
+        arch.getRange(1, 1, 1, w).setValues([TABS.ratings.headers.map((h) => (h === 'Score' ? 'Score (out of 5)' : h))]).setFontWeight('bold').setBackground('#14213D').setFontColor('#F3E2C0');
+        arch.setFrozenRows(1);
+      }
+      const vals = sh.getRange(2, 1, last - 1, w).getValues();
+      arch.getRange(arch.getLastRow() + 1, 1, vals.length, w).setNumberFormat('@').setValues(vals.map((r) => r.map((c) => (c instanceof Date ? c.toISOString() : String(c)))));
+      sh.getRange(2, 1, last - 1, w).clearContent();
+    }
+    const tr = sheet_('training'), tl = tr.getLastRow();
+    if (tl > 1) {
+      const rg = tr.getRange(2, TABS.training.headers.indexOf('Target') + 1, tl - 1, 1);
+      rg.setValues(rg.getValues().map(([v]) => [Number(v) >= 1 && Number(v) <= 5 ? String(Number(v) * 2) : v]));
+    }
+    setSetting_('scale', '10');
+    bumpRev_('');
+  } finally { lock.releaseLock(); }
 }
 
 /* ============================== live sync ============================== */

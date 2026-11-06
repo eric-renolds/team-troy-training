@@ -15,9 +15,11 @@ Any VA can be a **trainer and a trainee at the same time**, and one trainer can 
 | Team | Search, filter and sort every VA; add VAs |
 | VA profile | Skills by category, strengths and focus areas, training (as trainee and as trainer), work notes, rating history |
 | Training | Board (Planned → In progress → Completed) and By trainer view; new training with **suggested best-match trainers** |
-| Skill matrix | Every VA × every skill, colour-coded; click a cell to re-rate |
+| Skill matrix | Every VA × every skill, colour-coded 1–10 (red → amber → green); click a cell to re-rate |
 | Team notes | Shared notes board for all managers — post, pin, search; new notes from others show a badge |
 | Settings | Team name, re-rate interval, managers (up to 3), skills, light/dark mode |
+
+**Rating scale:** 1–10 (1 Beginner … 6 Competent … 8 Strong … 10 Expert). Ratings from the old 1–5 scale were moved to the `Skill Ratings (old 1-5)` tab.
 
 Search anything with **Ctrl K** (⌘K on Mac).
 
