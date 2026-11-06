@@ -40,6 +40,9 @@
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 8v.01"/>',
     target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/>',
     sort: '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
+    chat: '<path d="M4 5.5h16v11H9.5L5 20.5v-4H4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+    pin: '<path d="M9 3.5h6l-1 6.5 3.5 3.5h-11L10 10z"/><path d="M12 13.5v7"/>',
+    refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 3.5V8h4.5M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20.5V16h-4.5"/>',
     trophy: '<path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1.5A3.5 3.5 0 0 0 7.5 11M17 6h3v1.5a3.5 3.5 0 0 1-3.5 3.5M12 14v3.5M8.5 20.5h7l-.8-3h-5.4z"/>',
   };
   const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
@@ -69,6 +72,7 @@
     const m = Math.round(d / 30);
     return m + (m === 1 ? ' month ago' : ' months ago');
   };
+  const agoTime = (v) => { const m = Math.floor((Date.now() - new Date(v)) / 60000); if (!(m >= 0)) return ago(v); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; if (m < 720) return Math.floor(m / 60) + ' h ago'; return ago(v); };
   const one = (n) => (n == null || isNaN(n) ? '—' : (Math.round(n * 10) / 10).toFixed(1));
   const lvl = (n) => (n == null || isNaN(n) ? 0 : Math.max(1, Math.min(5, Math.round(n))));
   const initials = (n) => String(n || '?').trim().split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
@@ -172,7 +176,13 @@
       N('p14', 1, 'Note', 'Started this week on Summit Ecom. Paired with Hannah for onboarding.'),
       N('p7', 25, 'Win', 'Built a reusable order-tracking template the whole account now uses.'),
     ];
-    return { people, skills, ratings, training, notes, settings: { teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers } };
+    const M = (d, m, text, pinned) => ({ id: 'm' + uid(), ts: at(d), manager: m, text, pinned: !!pinned, edited: '', sample: 'Y' });
+    const teamNotes = [
+      M(9, managers[0], 'Reminder: everyone gets re-rated before the end of the month. Split the list — I\'ll take A–M, Eric takes N–Z.', true),
+      M(2, managers[1], 'Brightline Realty is adding two listings agents next week. We may need one more VA on that account — Bea and Nicole are the best fit.'),
+      M(0.2, managers[1], 'Maria is on leave from the 15th. Joshua is covering her trainees.'),
+    ];
+    return { people, skills, ratings, training, notes, teamNotes, settings: { teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers } };
   }
 
   /* ------------------------------------------------------------------ state */
@@ -181,6 +191,7 @@
   let PW = store.get('tt-pw', true) || '';
   const ui = { teamFilter: 'all', teamQuery: '', teamSort: 'name', trainView: 'board', trainQuery: '', matrixCat: 'overview', openCats: {}, matrixQuery: '', vaTab: 'overview' };
   let C = null; // derived cache
+  let REV = null; // server revision we last loaded (live sync)
 
   function normalise(d) {
     d.people = (d.people || []).map((p) => Object.assign({ role: 'VA', account: '', active: 'Y' }, p));
@@ -188,6 +199,7 @@
     d.ratings = (d.ratings || []).map((r) => Object.assign({}, r, { score: Number(r.score) })).filter((r) => r.score >= 1 && r.score <= 5);
     d.training = (d.training || []).map((t) => Object.assign({}, t, { skills: Array.isArray(t.skills) ? t.skills : String(t.skills || '').split(/\s*;\s*/).filter(Boolean), target: Number(t.target) || 4 }));
     d.notes = d.notes || [];
+    d.teamNotes = (d.teamNotes || []).map((n) => Object.assign({}, n, { pinned: n.pinned === true || n.pinned === 'Y' }));
     d.settings = Object.assign({ teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers: [] }, d.settings || {});
     if (typeof d.settings.managers === 'string') d.settings.managers = d.settings.managers.split(/\s*[,;\n]\s*/).filter(Boolean);
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
@@ -287,23 +299,67 @@
     if (!j.ok) throw new Error(j.error || 'Something went wrong');
     return j;
   }
+  let inflight = 0;
   async function save(action, payload, mutate, okMsg) {
     mutate(); invalidate(); render();
     if (okMsg) toast(okMsg);
+    inflight++;
     try { await api(action, payload); }
-    catch (err) { toast('Could not save: ' + err.message, true); await load(); }
+    catch (err) { toast('Could not save: ' + err.message, true); await load().catch(() => {}); render(); }
+    finally { inflight--; }
   }
   async function load() {
     if (DEMO) { DB = normalise(sampleData()); invalidate(); return; }
     const j = await api('getAll');
-    DB = normalise(j.data); invalidate();
+    DB = normalise(j.data); REV = j.rev || null; invalidate();
   }
 
+  /* ------------------------------------------------------------------ live sync
+     Every change on the server bumps a revision number. Each open portal checks it every
+     few seconds (a tiny request) and reloads everything when another manager changed
+     something, so all managers always see the same data. Updates wait while you are typing
+     or have a dialog open, so nothing you are in the middle of gets wiped. */
+  const POLL_MS = 10000;
+  let polling = false, pending = null;
+  const busy = () => { if ($('dialog[open]')) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
+  async function poll(force) {
+    if (DEMO || !PW || !ME || !DB || polling || inflight) return;
+    if (document.hidden && !force) return;
+    polling = true;
+    try {
+      const r = await api('rev');
+      if (REV && r.rev && r.rev.n === REV.n) return;
+      const j = await api('getAll');
+      if (inflight) return; // our own save is still going; the next check picks everything up
+      pending = { data: normalise(j.data), rev: j.rev || null };
+      applyPending();
+    } catch (err) {
+      if (/incorrect password/i.test(err.message)) { PW = ''; store.del('tt-pw', true); renderLogin('The manager password was changed. Please sign in again.'); }
+    } finally { polling = false; }
+  }
+  function applyPending() {
+    if (!pending || busy()) return;
+    const { data, rev } = pending; pending = null;
+    const prevNotes = new Set((DB.teamNotes || []).map((n) => n.id));
+    const fromOther = rev && rev.by && rev.by !== ME;
+    DB = data; REV = rev; invalidate();
+    render();
+    if (fromOther) {
+      const fresh = DB.teamNotes.filter((n) => !prevNotes.has(n.id) && n.manager !== ME);
+      toast(fresh.length ? `${fresh[0].manager} posted a team note` : `Updated with ${rev.by}'s changes`, false, 'refresh');
+    }
+  }
+  setInterval(poll, POLL_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(true); });
+  window.addEventListener('focus', () => poll(true));
+  document.addEventListener('focusout', () => setTimeout(applyPending, 50));
+  document.addEventListener('close', () => setTimeout(applyPending, 50), true);
+
   /* ------------------------------------------------------------------ toasts */
-  function toast(msg, bad) {
+  function toast(msg, bad, icon) {
     const el = document.createElement('div');
     el.className = 'toast';
-    el.innerHTML = (bad ? '' : ic('check')) + esc(msg);
+    el.innerHTML = (bad ? '' : ic(icon || 'check')) + esc(msg);
     $('#toasts').appendChild(el);
     setTimeout(() => el.remove(), 3200);
   }
@@ -314,6 +370,7 @@
     { id: 'team', href: '#/team', label: 'Team', icon: 'team' },
     { id: 'training', href: '#/training', label: 'Training', icon: 'training' },
     { id: 'matrix', href: '#/matrix', label: 'Skill matrix', icon: 'matrix', short: 'Matrix' },
+    { id: 'notes', href: '#/notes', label: 'Team notes', icon: 'chat', short: 'Notes' },
   ];
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').filter(Boolean);
@@ -323,7 +380,8 @@
   function shell(r, crumbs, body) {
     const section = r.page === 'va' ? 'team' : r.page;
     const attn = derive().attention.length;
-    const link = (n, mobile) => `<a href="${n.href}" ${section === n.id ? 'aria-current="page"' : ''}>${ic(n.icon)}<span>${mobile && n.short ? n.short : n.label}</span>${!mobile && n.id === 'home' && attn ? `<span class="count" title="Items needing attention">${attn}</span>` : ''}</a>`;
+    const unread = unreadNotes().length;
+    const link = (n, mobile) => `<a href="${n.href}" ${section === n.id ? 'aria-current="page"' : ''}>${ic(n.icon)}<span>${mobile && n.short ? n.short : n.label}</span>${!mobile && n.id === 'home' && attn ? `<span class="count" title="Items needing attention">${attn}</span>` : ''}${n.id === 'notes' && unread ? `<span class="${mobile ? 'dot-count' : 'count count-new'}" title="${unread} new note${unread === 1 ? '' : 's'}">${unread}</span>` : ''}</a>`;
     return `<div class="shell">
       <aside class="sidebar">
         <a class="brand" href="#/">${MARK}<div><div class="brand-name">${esc(DB.settings.teamName)}</div><div class="brand-sub">Training Portal</div></div></a>
@@ -354,7 +412,8 @@
     if (!ME) return renderWho();
     derive();
     const r = route();
-    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, settings: pageSettings };
+    if (r.page !== 'notes') ui.notesNew = null;
+    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, settings: pageSettings };
     const fn = pages[r.page] || pageHome;
     const out = fn(r);
     const y = window.scrollY;
@@ -389,6 +448,7 @@
         ${kpi('training', 'Active trainings', c.openT.length, overdue ? `<span style="color:var(--bad);font-weight:600">${overdue} overdue</span>` : 'All on schedule')}
         ${kpi('clock', 'Due for rating', due, `Re-rate every ${DB.settings.reassessDays} days`)}
       </div>
+      ${homeNotesCard()}
       <div class="grid grid-2" style="margin-bottom:20px">
         <section class="card">
           <div class="card-head"><h2>Needs your attention</h2><span class="sub">${c.attention.length} item${c.attention.length === 1 ? '' : 's'}</span></div>
@@ -425,6 +485,7 @@
     DB.people.forEach((p) => (c.hist[p.id] || []).forEach((s) => ev.push({ ts: s.ts, html: `<b>${esc(s.manager)}</b> rated <a href="#/va/${esc(p.id)}">${esc(p.name)}</a> · avg ${one(s.avg)}`, icon: 'star', tone: 'tone-accent' })));
     DB.training.forEach((t) => { const a = person(t.traineeId), b = person(t.trainerId); if (a && b) ev.push({ ts: t.created, html: `<a href="#/va/${esc(b.id)}">${esc(b.name)}</a> is training <a href="#/va/${esc(a.id)}">${esc(a.name)}</a> on ${esc(t.skills.join(', '))}`, icon: 'training', tone: 'tone-info' }); });
     DB.notes.forEach((n) => { const p = person(n.personId); if (p) ev.push({ ts: n.ts, html: `<b>${esc(n.manager)}</b> added a ${esc(n.type.toLowerCase())} on <a href="#/va/${esc(p.id)}">${esc(p.name)}</a>`, icon: 'note', tone: NOTE_TYPES[n.type] || 'tone-info' }); });
+    DB.teamNotes.forEach((n) => ev.push({ ts: n.ts, html: `<b>${esc(n.manager)}</b> posted a <a href="#/notes">team note</a>`, icon: 'chat', tone: 'tone-info' }));
     return ev.sort((a, b) => (a.ts < b.ts ? 1 : -1));
   }
   function activityList(n) {
@@ -684,6 +745,91 @@
     };
   }
 
+  /* ------------------------------------------------------------------ Team notes
+     A shared board every manager can post to. New notes from other managers show a badge
+     until you open this page. */
+  const seenKey = () => 'tt-notes-seen|' + ME;
+  const unreadNotes = () => { const seen = store.get(seenKey()) || ''; return (DB.teamNotes || []).filter((n) => n.manager !== ME && String(n.ts) > seen); };
+  const sortedNotes = () => DB.teamNotes.slice().sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : a.ts < b.ts ? 1 : -1));
+  const markNotesSeen = () => { const max = DB.teamNotes.reduce((m, n) => (String(n.ts) > m ? String(n.ts) : m), store.get(seenKey()) || ''); if (max) store.set(seenKey(), max); };
+
+  function noteItem(n, opts) {
+    const mine = n.manager === ME, isNew = opts && opts.isNew;
+    return `<li class="tnote ${n.pinned ? 'pinned' : ''} ${isNew ? 'is-new' : ''}" data-note="${esc(n.id)}">${avatar({ id: 'm', name: n.manager })}<div class="grow">
+      <div class="tnote-head"><b>${esc(n.manager || 'Manager')}</b>${mine ? '<span class="muted">(you)</span>' : ''}<span class="muted" title="${esc(fmt(n.ts, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}">· ${agoTime(n.ts)}</span>${n.edited ? '<span class="muted">· edited</span>' : ''}${n.pinned ? `<span class="pill plain tone-accent">${ic('pin')}Pinned</span>` : ''}${isNew ? '<span class="pill plain tone-good">New</span>' : ''}</div>
+      <div class="txt">${esc(n.text)}</div>
+      ${opts && opts.compact ? '' : `<div class="tnote-actions"><button class="btn btn-ghost btn-sm" data-act="tnote-pin" data-id="${esc(n.id)}">${ic('pin')}${n.pinned ? 'Unpin' : 'Pin'}</button>${mine ? `<button class="btn btn-ghost btn-sm" data-act="tnote-edit" data-id="${esc(n.id)}">${ic('edit')}Edit</button><button class="btn btn-ghost btn-sm btn-danger" data-act="tnote-del" data-id="${esc(n.id)}">${ic('x')}Delete</button>` : ''}</div>`}
+    </div></li>`;
+  }
+
+  function notesList() {
+    const q = (ui.notesQuery || '').trim().toLowerCase();
+    const list = sortedNotes().filter((n) => !q || (n.text + ' ' + n.manager).toLowerCase().includes(q));
+    if (!DB.teamNotes.length) return '<div class="empty"><b>No team notes yet</b>Post the first one — every manager will see it.</div>';
+    if (!list.length) return '<div class="empty"><b>No notes match</b>Try a different search.</div>';
+    return `<ul class="list tnotes">${list.map((n) => noteItem(n, { isNew: ui.notesNew && ui.notesNew.has(n.id) })).join('')}</ul>`;
+  }
+
+  function pageNotes() {
+    ui.notesNew = ui.notesNew || new Set();
+    unreadNotes().forEach((n) => ui.notesNew.add(n.id));
+    markNotesSeen();
+    const others = DB.settings.managers.filter((m) => m !== ME);
+    const body = `
+      <div class="page-head"><div><h1>Team notes</h1><p>A shared space for managers. Everything posted here is visible to ${others.length ? esc(others.join(', ')) : 'every manager'}.</p></div></div>
+      <section class="card composer" style="margin-bottom:20px"><form data-form="tnote" class="card-body">
+        <div class="composer-row">${avatar({ id: 'm', name: ME })}<label class="grow"><span class="sr-only">New team note</span><textarea class="textarea" name="text" id="tnote-text" placeholder="Share an update, reminder or decision with the other managers…" required>${esc(ui.noteDraft || '')}</textarea></label></div>
+        <div class="composer-foot"><label class="check"><input type="checkbox" name="pinned"> Pin to the top</label><span class="muted hide-sm" style="font-size:12px">Ctrl + Enter to post</span><button class="btn btn-primary">${ic('chat')}Post note</button></div>
+      </form></section>
+      <div class="toolbar"><label class="search-field">${ic('search')}<span class="sr-only">Search notes</span><input class="input" id="notes-q" type="search" placeholder="Search notes" value="${esc(ui.notesQuery || '')}"></label>
+        <span class="muted" style="margin-left:auto">${DB.teamNotes.length} note${DB.teamNotes.length === 1 ? '' : 's'}${DEMO ? '' : ' · updates automatically'}</span></div>
+      <section class="card" id="notes-list">${notesList()}</section>`;
+    return {
+      title: 'Team notes', crumbs: '<b>Team notes</b>', body,
+      after() {
+        const form = $('[data-form="tnote"]'), ta = $('#tnote-text');
+        ta.addEventListener('input', () => { ui.noteDraft = ta.value; });
+        ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); } });
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const f = new FormData(form), text = String(f.get('text') || '').trim();
+          if (!text) { ta.focus(); return; }
+          const n = { id: 'm' + uid(), ts: new Date().toISOString(), manager: ME, text, pinned: !!f.get('pinned'), edited: '' };
+          ui.noteDraft = '';
+          ta.blur();
+          save('saveTeamNote', { teamNote: n }, () => { DB.teamNotes.push(n); markNotesSeen(); }, 'Note posted for all managers');
+        });
+        $('#notes-q').addEventListener('input', (e) => { ui.notesQuery = e.target.value; $('#notes-list').innerHTML = notesList(); });
+        if (ui.focusComposer) { ui.focusComposer = false; ta.focus(); }
+      },
+    };
+  }
+
+  function homeNotesCard() {
+    const unread = new Set(unreadNotes().map((n) => n.id));
+    const list = sortedNotes().slice(0, 3);
+    return `<section class="card" style="margin-bottom:20px">
+      <div class="card-head"><h2>Team notes</h2><span class="sub">${unread.size ? `<span class="pill plain tone-good">${unread.size} new</span>` : 'Shared by all managers'}</span>
+        <button class="btn btn-sm right" data-act="tnote-new">${ic('plus')}Post</button><a class="btn btn-ghost btn-sm" href="#/notes">All notes ${ic('chevron')}</a></div>
+      ${list.length ? `<ul class="list tnotes">${list.map((n) => noteItem(n, { compact: true, isNew: unread.has(n.id) })).join('')}</ul>` : '<div class="empty">No team notes yet. Post one and every manager will see it.</div>'}
+    </section>`;
+  }
+
+  function teamNoteDialog(id) {
+    const n = DB.teamNotes.find((x) => x.id === id);
+    if (!n) return;
+    modal({
+      title: 'Edit team note', submit: 'Save',
+      body: `<label class="field"><span>Note</span><textarea class="textarea" name="text" required style="min-height:140px">${esc(n.text)}</textarea></label>
+        <label class="check"><input type="checkbox" name="pinned" ${n.pinned ? 'checked' : ''}> Pin to the top</label>`,
+      onSubmit(f) {
+        const text = String(f.get('text')).trim();
+        const rec = Object.assign({}, n, { text, pinned: !!f.get('pinned'), edited: text !== n.text ? new Date().toISOString() : n.edited });
+        save('saveTeamNote', { teamNote: rec }, () => { DB.teamNotes = DB.teamNotes.map((x) => (x.id === id ? rec : x)); }, 'Note updated');
+      },
+    });
+  }
+
   /* ------------------------------------------------------------------ Settings */
   function currentScheme() { const m = $('meta[name="color-scheme"]'); return m.content === 'light' || m.content === 'dark' ? m.content : 'system'; }
   function setScheme(v) {
@@ -723,13 +869,13 @@
         $('[data-form="team"]').addEventListener('submit', (e) => {
           e.preventDefault(); const f = new FormData(e.target);
           const next = Object.assign({}, DB.settings, { teamName: f.get('teamName').trim(), reassessDays: Number(f.get('reassessDays')) });
-          save('saveSettings', { settings: next }, () => { DB.settings = next; }, 'Settings saved');
+          save('saveSettings', { settings: { teamName: next.teamName, reassessDays: next.reassessDays } }, () => { DB.settings = next; }, 'Settings saved');
         });
         const mf = $('[data-form="manager"]');
         if (mf) mf.addEventListener('submit', (e) => {
           e.preventDefault(); const n = new FormData(e.target).get('name').trim(); if (!n) return;
           const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.concat(n) });
-          save('saveSettings', { settings: next }, () => { DB.settings = next; }, n + ' added as a manager');
+          save('addManager', { name: n }, () => { DB.settings = next; }, n + ' added as a manager');
         });
       },
     };
@@ -858,7 +1004,7 @@
         const newSkills = added.filter((s) => ratedNames.has(s.name));
         if (newSkills.length) {
           const next = DB.skills.filter((s) => !newSkills.some((n) => n.reactivate && n.name === s.name)).concat(newSkills.map(({ name, category }) => ({ name, category, active: 'Y' })));
-          save('saveSkills', { skills: next }, () => { DB.skills = next; });
+          save('saveSkills', { skills: newSkills.map(({ name, category }) => ({ name, category, active: 'Y' })) }, () => { DB.skills = next; });
         }
         save('saveRatings', { rows, note: note ? { id: 'n' + uid(), personId: id, ts, type: 'Note', text: 'Rating note: ' + note, manager: ME } : null }, () => {
           DB.ratings.push(...rows);
@@ -990,7 +1136,7 @@
         const rec = { name: String(f.get('name')).trim(), category: String(f.get('category')).trim(), active: f.get('active') };
         if (!k && DB.skills.some((s) => s.name.toLowerCase() === rec.name.toLowerCase())) { toast('That skill already exists', true); return false; }
         const next = DB.skills.slice(); if (k) next[i] = rec; else next.push(rec);
-        save('saveSkills', { skills: next }, () => { DB.skills = next; }, k ? 'Skill saved' : 'Skill added');
+        save('saveSkills', { skills: [rec] }, () => { DB.skills = next; }, k ? 'Skill saved' : 'Skill added');
       },
     });
   }
@@ -1002,8 +1148,8 @@
     d.innerHTML = `<div class="palette-input">${ic('search')}<input type="text" placeholder="Search VAs, pages or actions…" aria-label="Search" autocomplete="off"></div><ul class="palette-list" role="listbox"></ul>`;
     document.body.appendChild(d);
     const input = $('input', d), list = $('ul', d);
-    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Settings', '#/settings']];
-    const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()]];
+    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Settings', '#/settings']];
+    const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()], ['Post a team note', () => newTeamNote()]];
     let items = [], sel = 0;
     const draw = () => {
       const q = input.value.trim().toLowerCase();
@@ -1044,7 +1190,7 @@
       </form></div></div>`;
     const pick = (n) => {
       ME = n; store.set('tt-manager', n);
-      if (!DB.settings.managers.includes(n)) { const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.concat(n) }); DB.settings = next; api('saveSettings', { settings: next }).catch(() => {}); }
+      if (!DB.settings.managers.includes(n)) { const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.concat(n) }); DB.settings = next; api('addManager', { name: n }).catch(() => {}); }
       render.keepScroll = false; render();
     };
     $$('#who [data-name]').forEach((b) => b.addEventListener('click', () => pick(b.dataset.name)));
@@ -1087,6 +1233,10 @@
       case 'edit-person': return personDialog(id);
       case 'remove-person': { const p = person(id); if (p && confirm(`Remove ${p.name} from the team?\n\nThis deletes their ratings, notes and trainings for good. To keep their history, edit them and set Status to Inactive instead.`)) removePerson(id); return; }
       case 'add-person': return personDialog();
+      case 'tnote-new': return newTeamNote();
+      case 'tnote-edit': return teamNoteDialog(id);
+      case 'tnote-pin': { const n = DB.teamNotes.find((x) => x.id === id); if (!n) return; const rec = Object.assign({}, n, { pinned: !n.pinned }); return save('saveTeamNote', { teamNote: rec }, () => { DB.teamNotes = DB.teamNotes.map((x) => (x.id === id ? rec : x)); }, rec.pinned ? 'Pinned for everyone' : 'Unpinned'); }
+      case 'tnote-del': if (confirm('Delete this team note for all managers?')) save('deleteTeamNote', { id }, () => { DB.teamNotes = DB.teamNotes.filter((n) => n.id !== id); }, 'Note deleted'); return;
       case 'add-skill': return skillDialog();
       case 'edit-skill': return skillDialog(Number(id));
       case 'team-filter': ui.teamFilter = id; return render();
@@ -1097,7 +1247,7 @@
       case 'del-manager': {
         if (!confirm(`Remove ${id} as a manager?`)) return;
         const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.filter((m) => m !== id) });
-        return save('saveSettings', { settings: next }, () => { DB.settings = next; }, id + ' removed');
+        return save('removeManager', { name: id }, () => { DB.settings = next; }, id + ' removed');
       }
     }
   });
@@ -1107,6 +1257,8 @@
   });
   document.addEventListener('toggle', (e) => { const g = e.target; if (g.matches && g.matches('#page details.group[data-cat]')) ui.openCats[g.dataset.cat] = g.open; }, true);
   window.addEventListener('storage', (e) => { if (e.key === 'tt-color-scheme') $('meta[name="color-scheme"]').content = e.newValue || 'light dark'; });
+
+  function newTeamNote() { ui.focusComposer = true; if (location.hash === '#/notes') render(); else { render.keepScroll = false; location.hash = '#/notes'; } }
 
   /* ------------------------------------------------------------------ boot */
   async function boot() {

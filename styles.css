@@ -500,7 +500,7 @@ dialog.palette::backdrop { background: rgb(11 19 34 / .45); }
   .hero { padding: 20px; flex-direction: column; align-items: flex-start; }
   .hero .actions { margin-left: 0; }
   .tabbar {
-    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+    display: grid; grid-template-columns: repeat(6, 1fr); position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
     background: var(--surface); border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
   }
   .tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; text-decoration: none; color: var(--muted); padding: 4px 0; font-weight: 500; }
@@ -583,3 +583,25 @@ details.group.compact .g-body { padding: 0 0 10px 26px; }
   .rate-list .g-body, .g-body, .g-list { padding-left: 4px; }
 }
 .matrix.overview { width: 100%; }
+
+/* ---------- Team notes ---------- */
+.nav .count-new { background: #5FBF8E; color: #0B2A1C; }
+.tabbar a { position: relative; }
+.dot-count { position: absolute; top: 0; left: 50%; margin-left: 6px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 10px; background: var(--good); color: #fff; font-size: 10.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.composer textarea { min-height: 84px; resize: vertical; }
+.composer-row { display: flex; gap: 12px; align-items: flex-start; }
+.composer-row .grow { flex: 1; min-width: 0; }
+.composer-foot { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding-left: 48px; }
+.composer-foot .btn { margin-left: auto; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.tnotes > li.tnote { align-items: flex-start; }
+.tnote .grow { flex: 1; min-width: 0; }
+.tnote-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13.5px; }
+.tnote-head .pill svg { width: 12px; height: 12px; margin-right: 3px; vertical-align: -1px; }
+.tnote .txt { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.tnote-actions { display: flex; gap: 4px; margin: 6px 0 0 -10px; }
+.tnote-actions .btn svg { width: 14px; height: 14px; }
+.tnote.pinned { background: var(--accent-soft); }
+.tnote.is-new { box-shadow: inset 3px 0 0 var(--good); }
+@media (max-width: 720px) { .composer-foot { padding-left: 0; flex-wrap: wrap; } }

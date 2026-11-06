@@ -27,6 +27,7 @@ const TABS = {
   training: { name: 'Trainings', headers: ['ID', 'Trainee ID', 'Trainee', 'Trainer ID', 'Trainer', 'Skills', 'Target', 'Start', 'Due', 'Status', 'Notes', 'Created', 'Updated'] },
   notes: { name: 'Work Notes', headers: ['ID', 'Person ID', 'Person', 'Date', 'Type', 'Note', 'Manager'] },
   settings: { name: 'Portal Settings', headers: ['Key', 'Value'] },
+  teamNotes: { name: 'Team Notes', headers: ['ID', 'Date', 'Manager', 'Note', 'Pinned', 'Edited'] },
 };
 
 const STANDARD_SKILLS = [
@@ -103,7 +104,8 @@ function doPost(e) {
     return json_({ ok: false, error: 'Incorrect password' });
   }
   try {
-    if (req.action === 'getAll') return json_({ ok: true, data: getAll_() });
+    if (req.action === 'getAll') return json_({ ok: true, data: getAll_(), rev: rev_() });
+    if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
@@ -117,10 +119,15 @@ function doPost(e) {
         case 'deletePerson': deletePerson_(req.id); break;
         case 'saveSkills': saveSkills_(req.skills || []); break;
         case 'saveSettings': saveSettings_(req.settings || {}); break;
+        case 'addManager': addManager_(req.name); break;
+        case 'removeManager': removeManager_(req.name); break;
+        case 'saveTeamNote': upsert_('teamNotes', 'ID', teamNoteRow_(req.teamNote, req.manager)); break;
+        case 'deleteTeamNote': deleteWhere_('teamNotes', 'ID', req.id); break;
         default: return json_({ ok: false, error: 'Unknown action' });
       }
+      bumpRev_(req.manager);
     } finally { lock.releaseLock(); }
-    return json_({ ok: true });
+    return json_({ ok: true, rev: rev_() });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
   }
@@ -139,6 +146,7 @@ function getAll_() {
     ratings: read_('ratings').map((r) => ({ ts: r.Timestamp, personId: r['Person ID'], skill: r.Skill, score: Number(r.Score), manager: r.Manager, note: r.Note })),
     training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 4, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
     notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
+    teamNotes: read_('teamNotes').map((n) => ({ id: n.ID, ts: n.Date, manager: n.Manager, text: n.Note, pinned: String(n.Pinned || '').toUpperCase() === 'Y', edited: n.Edited })),
     settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: String(s.managers || '').split(/\s*[,;\n]\s*/).filter(String) }; })(),
   };
 }
@@ -187,12 +195,45 @@ function deletePerson_(id) {
   deleteWhere_('training', 'Trainer ID', id);
 }
 
+// Merge, never replace: each skill sent is added or updated by name, so two managers
+// editing skills at the same time can't wipe out each other's changes.
 function saveSkills_(skills) {
-  const sh = sheet_('skills');
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent();
-  const rows = skills.filter((s) => String(s.name || '').trim()).map((s) => [String(s.name).trim(), String(s.category || 'Other').trim(), s.active === 'N' ? 'N' : 'Y']);
+  const sh = sheet_('skills'), last = sh.getLastRow();
+  const rows = last > 1 ? sh.getRange(2, 1, last - 1, 3).getValues().filter((r) => String(r[0]).trim()) : [];
+  const at = {}; rows.forEach((r, i) => (at[String(r[0]).trim().toLowerCase()] = i));
+  skills.filter((s) => String(s.name || '').trim()).forEach((s) => {
+    const r = [String(s.name).trim(), String(s.category || 'Other').trim(), s.active === 'N' ? 'N' : 'Y'];
+    const k = r[0].toLowerCase();
+    if (k in at) rows[at[k]] = r; else { at[k] = rows.length; rows.push(r); }
+  });
+  if (last > 1) sh.getRange(2, 1, last - 1, 3).clearContent();
   if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
 }
+
+function managers_() { return String(readSettings_().managers || '').split(/\s*[,;\n]\s*/).filter(String); }
+function addManager_(name) {
+  const n = String(name || '').trim();
+  if (!n) throw new Error('Name is required');
+  const list = managers_();
+  if (list.some((m) => m.toLowerCase() === n.toLowerCase())) return;
+  if (list.length >= 3) throw new Error('There are already 3 managers');
+  setSetting_('managers', list.concat(n).join(', '));
+}
+function removeManager_(name) { setSetting_('managers', managers_().filter((m) => m !== name).join(', ')); }
+
+function teamNoteRow_(n, manager) {
+  if (!n || !String(n.text || '').trim()) throw new Error('Note text is required');
+  const old = n.id ? read_('teamNotes').find((r) => r.ID === n.id) : null;
+  return {
+    ID: n.id || id_('m'), Date: old ? old.Date : (n.ts || new Date().toISOString()), Manager: old ? old.Manager : (n.manager || manager || ''),
+    Note: String(n.text).trim(), Pinned: n.pinned ? 'Y' : '', Edited: old && String(old.Note) !== String(n.text).trim() ? new Date().toISOString() : (old ? old.Edited : ''),
+  };
+}
+
+/* ============================== live sync ============================== */
+// Every change bumps a revision number. Open portals poll it cheaply and reload when it changes.
+function rev_() { const p = PropertiesService.getScriptProperties(); return { n: Number(p.getProperty('rev') || 0), by: p.getProperty('revBy') || '' }; }
+function bumpRev_(by) { const p = PropertiesService.getScriptProperties(); p.setProperties({ rev: String(Number(p.getProperty('rev') || 0) + 1), revBy: String(by || '') }); }
 
 function saveSettings_(s) {
   if (s.teamName != null) setSetting_('teamName', String(s.teamName));

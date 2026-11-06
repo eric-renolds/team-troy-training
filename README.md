@@ -16,9 +16,14 @@ Any VA can be a **trainer and a trainee at the same time**, and one trainer can 
 | VA profile | Skills by category, strengths and focus areas, training (as trainee and as trainer), work notes, rating history |
 | Training | Board (Planned → In progress → Completed) and By trainer view; new training with **suggested best-match trainers** |
 | Skill matrix | Every VA × every skill, colour-coded; click a cell to re-rate |
+| Team notes | Shared notes board for all managers — post, pin, search; new notes from others show a badge |
 | Settings | Team name, re-rate interval, managers (up to 3), skills, light/dark mode |
 
 Search anything with **Ctrl K** (⌘K on Mac).
+
+**Live sync:** every open portal checks the sheet every 10 seconds (and whenever you come back to the tab).
+When another manager changes anything, your screen updates and a short message says who changed it.
+Updates wait while you're typing or have a dialog open, so nothing you're working on is lost.
 
 ## Set up (one time)
 
@@ -30,7 +35,7 @@ Leave `API_URL` empty to explore the portal with sample data.
 
 ## Sheet tabs (created by `setup()`)
 
-`VA Team`, `Skill List`, `Skill Ratings` (every rating is kept, so history is never lost), `Trainings`, `Work Notes`, `Portal Settings`.
+`VA Team`, `Skill List`, `Skill Ratings` (every rating is kept, so history is never lost), `Trainings`, `Work Notes`, `Portal Settings`, `Team Notes` (created automatically the first time someone posts).
 Old v1/v2 tabs are left untouched; `setup()` copies VA names and skills from them the first time.
 
 ## Changing the password
