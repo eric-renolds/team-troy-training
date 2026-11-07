@@ -3,18 +3,22 @@
  * ---------------------------------------------------------------------
  * The website (GitHub Pages) talks to this script; this script reads and writes the Google Sheet.
  *
- * ONE-TIME SETUP
- * 1. Create a new Apps Script project (script.google.com → New project) or open the sheet's own script.
- * 2. Paste this file into Code.gs and check SHEET_ID below, then save.
- * 3. Change MANAGER_PASSWORD below, then run setup() once (Run ▶). Approve the permissions.
- *    It creates the tabs, adds the standard skills and copies VA names from the old portal tabs.
- * 4. Deploy → New deployment → type: Web app → Execute as: Me → Who has access: Anyone → Deploy.
- *    (If you already have a deployment: Deploy → Manage deployments → Edit → Version: New version → Deploy.)
- * 5. Copy the Web app URL (ends in /exec) into config.js on GitHub → API_URL.
+ * SIGN-IN: managers sign in with Google through the small "Team Troy Sign-in" script (signin/Login.gs).
+ * It hands the portal a Google identity token; the 'login' action below checks that token with Google,
+ * checks the email against the "Managers" tab (managed in the portal's Settings), and returns a signed
+ * 7-day session. Every request re-checks the Managers list, so removing someone locks them out at once.
+ * The Google account that owns this script is always allowed, so it can't be locked out.
  *
- * The password lives only here, never in the public GitHub repo.
+ * ONE-TIME SETUP
+ * 1. Deploy signin/Login.gs as its own Apps Script web app (see the notes in that file) and open its
+ *    URL with ?setup=1 to see its "sign-in audience". Paste that into LOGIN_AUDIENCE below.
+ * 2. Paste this file into Code.gs, check SHEET_ID, save, then run setup() once (Run ▶) and approve.
+ * 3. Deploy → New deployment → Web app → Execute as: Me → Who has access: Anyone → Deploy.
+ *    (Existing deployment: Deploy → Manage deployments → Edit → Version: New version → Deploy.)
+ * 4. Copy the Web app URL (ends in /exec) into config.js → API_URL, and the sign-in URL → LOGIN_URL.
  */
-const MANAGER_PASSWORD = 'CHANGE-ME';
+const LOGIN_AUDIENCE = '675995317775-vlomcmubpbklontvccqj9ljc77flpdnq.apps.googleusercontent.com';
+const SESSION_DAYS = 7;
 
 // The "Team Troy Training Portal" Google Sheet (the long ID in its URL).
 const SHEET_ID = '1IGhyXRyjX0BneNg94zqsoXRkriQJb2adwQIDbWqaSHQ';
@@ -27,6 +31,7 @@ const TABS = {
   training: { name: 'Trainings', headers: ['ID', 'Trainee ID', 'Trainee', 'Trainer ID', 'Trainer', 'Skills', 'Target', 'Start', 'Due', 'Status', 'Notes', 'Created', 'Updated'] },
   notes: { name: 'Work Notes', headers: ['ID', 'Person ID', 'Person', 'Date', 'Type', 'Note', 'Manager'] },
   settings: { name: 'Portal Settings', headers: ['Key', 'Value'] },
+  managers: { name: 'Managers', headers: ['Name', 'Email', 'Added', 'Added by'] },
   teamNotes: { name: 'Team Notes', headers: ['ID', 'Date', 'Manager', 'Note', 'Pinned', 'Edited'] },
 };
 
@@ -81,11 +86,24 @@ function setup() {
     if (rows.length) sheet_('team').getRange(2, 1, rows.length, rows[0].length).setValues(rows);
   }
 
+  migrateManagers_();
   const st = readSettings_();
   if (!st.teamName) setSetting_('teamName', 'Team Troy');
   if (!st.reassessDays) setSetting_('reassessDays', '45');
   if (!st.managers) setSetting_('managers', '');
+  UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo', { muteHttpExceptions: true }); // asks for the sign-in check permission
   safeAlert_('Team Troy portal is set up. Now deploy it as a web app (see the notes at the top of Code.gs).');
+}
+
+// Copies the old name-only managers list into the Managers tab (emails are added later in Settings).
+function migrateManagers_() {
+  const sh = sheet_('managers');
+  if (sh.getLastRow() > 1) return;
+  const names = String(readSettings_().managers || '').split(/\s*[,;\n]\s*/).filter(String);
+  const owner = ownerEmail_();
+  if (names.length) sh.getRange(2, 1, names.length, 4).setValues(names.map((n) => [n, '', new Date().toISOString(), 'setup']));
+  // Make sure the owner can always see themselves in the list.
+  if (owner && !names.length) sh.appendRow(['Owner', owner, new Date().toISOString(), 'setup']);
 }
 
 function safeAlert_(msg) { try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); } }
@@ -99,39 +117,141 @@ function doGet() {
 function doPost(e) {
   let req;
   try { req = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: 'Bad request' }); }
-  if (!req || String(req.password) !== MANAGER_PASSWORD) {
-    Utilities.sleep(700);
-    return json_({ ok: false, error: 'Incorrect password' });
-  }
+  let me;
   try {
-    if (req.action === 'getAll') { ensureScale10_(); return json_({ ok: true, data: getAll_(), rev: rev_() }); }
+    if (req && req.action === 'login') { me = login_(req.idToken); return json_({ ok: true, session: newSession_(me.email, me.name), me: me }); }
+    me = authorize_(req && req.session);
+  } catch (err) { return json_({ ok: false, error: err.message, code: err.code || 'signin' }); }
+  req.manager = me.name; // every change is recorded under the signed-in manager
+  try {
+    if (req.action === 'whoami') return json_({ ok: true, me: me });
+    if (req.action === 'getAll') { ensureScale10_(); migrateManagers_(); return json_({ ok: true, data: getAll_(), rev: rev_(), me: me }); }
     if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
       switch (req.action) {
         case 'savePerson': upsert_('team', 'ID', personRow_(req.person)); break;
-        case 'saveRatings': saveRatings_(req.rows || [], req.note); break;
+        case 'saveRatings': (req.rows || []).forEach((r) => (r.manager = me.name)); if (req.note) req.note.manager = me.name; saveRatings_(req.rows || [], req.note); break;
         case 'deleteRatings': deleteRatings_(req.keys || []); break;
         case 'saveTraining': upsert_('training', 'ID', trainingRow_(req.training)); break;
         case 'deleteTraining': deleteWhere_('training', 'ID', req.id); break;
-        case 'saveNote': appendObj_('notes', noteRow_(req.note)); break;
+        case 'saveNote': if (req.note) req.note.manager = me.name; appendObj_('notes', noteRow_(req.note)); break;
         case 'deleteNote': deleteWhere_('notes', 'ID', req.id); break;
         case 'deletePerson': deletePerson_(req.id); break;
         case 'saveSkills': saveSkills_(req.skills || []); break;
         case 'saveSettings': saveSettings_(req.settings || {}); break;
-        case 'addManager': addManager_(req.name); break;
-        case 'removeManager': removeManager_(req.name); break;
-        case 'saveTeamNote': upsert_('teamNotes', 'ID', teamNoteRow_(req.teamNote, req.manager)); break;
+        case 'saveManager': saveManager_(req.name, req.email, req.oldEmail, me); break;
+        case 'removeManager': removeManager_(req.email, me, req.name); break;
+        case 'saveTeamNote': upsert_('teamNotes', 'ID', teamNoteRow_(req.teamNote, me.name)); break;
         case 'deleteTeamNote': deleteWhere_('teamNotes', 'ID', req.id); break;
         default: return json_({ ok: false, error: 'Unknown action' });
       }
-      bumpRev_(req.manager);
+      bumpRev_(me.name);
     } finally { lock.releaseLock(); }
     return json_({ ok: true, rev: rev_() });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
   }
+}
+
+/* ============================== Google sign-in ============================== */
+
+function authError_(msg, code) { const e = new Error(msg); e.code = code; return e; }
+function normEmail_(e) { return String(e || '').trim().toLowerCase(); }
+function ownerEmail_() { try { return normEmail_(Session.getEffectiveUser().getEmail()); } catch (e) { return ''; } }
+
+// Who may use the portal: anyone on the Managers tab with an email, plus the script owner.
+function managerFor_(email, googleName) {
+  const row = readManagers_().find((m) => m.email === email);
+  const owner = email === ownerEmail_();
+  if (!row && !owner) throw authError_(email + " doesn't have access to this portal. Ask a manager to add this email in Settings → Managers.", 'denied');
+  return { email: email, name: row ? row.name : (googleName || email), owner: owner };
+}
+
+// 'login': checks Google's identity token (from the Team Troy Sign-in script) and the Managers list.
+function login_(idToken) {
+  if (!idToken) throw authError_('Please sign in with Google.', 'signin');
+  const t = verifyIdToken_(String(idToken));
+  return managerFor_(normEmail_(t.email), t.name);
+}
+
+// Every other request carries the portal's own signed session.
+function authorize_(session) {
+  const s = readSession_(session);
+  if (!s) throw authError_('Please sign in with Google.', 'signin');
+  return managerFor_(s.email, s.name);
+}
+
+// Sessions are "payload.signature", signed with a random secret kept in this script's properties
+// (created automatically, never shared). Deleting the 'sessionSecret' property signs everyone out.
+function sessionSecret_() {
+  const p = PropertiesService.getScriptProperties();
+  let k = p.getProperty('sessionSecret');
+  if (!k) { k = Utilities.getUuid() + Utilities.getUuid(); p.setProperty('sessionSecret', k); }
+  return k;
+}
+function sign_(str) { return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(str, sessionSecret_())).replace(/=+$/, ''); }
+function newSession_(email, name) {
+  const body = Utilities.base64EncodeWebSafe(JSON.stringify({ e: email, n: name || '', x: Date.now() + SESSION_DAYS * 86400000 })).replace(/=+$/, '');
+  return body + '.' + sign_(body);
+}
+function readSession_(tok) {
+  const parts = String(tok || '').split('.');
+  if (parts.length !== 2 || sign_(parts[0]) !== parts[1]) return null;
+  let d;
+  try { d = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0] + '==='.slice((parts[0].length + 3) % 4))).getDataAsString()); } catch (e) { return null; }
+  if (!d || !d.e || !(d.x > Date.now())) throw authError_('Your sign-in has expired. Please sign in again.', 'signin');
+  return { email: normEmail_(d.e), name: d.n || '' };
+}
+
+function verifyIdToken_(token) {
+  const cache = CacheService.getScriptCache();
+  const key = 'tok_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token)).slice(0, 40);
+  const hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+  const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw authError_('Your sign-in has expired. Please sign in again.', 'signin');
+  const t = JSON.parse(res.getContentText());
+  const now = Math.floor(Date.now() / 1000);
+  if (t.aud !== LOGIN_AUDIENCE) throw authError_('Sign-in is not set up for this portal yet.', 'signin');
+  if (t.iss !== 'accounts.google.com' && t.iss !== 'https://accounts.google.com') throw authError_('Invalid sign-in.', 'signin');
+  if (String(t.email_verified) !== 'true') throw authError_('Your Google email is not verified.', 'denied');
+  if (Number(t.exp) <= now) throw authError_('Your sign-in has expired. Please sign in again.', 'signin');
+  const out = { email: t.email, name: t.name || '' };
+  cache.put(key, JSON.stringify(out), Math.max(1, Math.min(600, Number(t.exp) - now - 30)));
+  return out;
+}
+
+/* ============================== managers ============================== */
+
+function readManagers_() {
+  return read_('managers').map((m) => ({ name: String(m.Name || '').trim(), email: normEmail_(m.Email), added: m.Added, addedBy: m['Added by'] })).filter((m) => m.name || m.email);
+}
+// Adds a manager, or updates one: matched by their previous email, or by name when they have no email yet.
+function saveManager_(name, email, oldEmail, me) {
+  const n = String(name || '').trim(), em = normEmail_(email), old = normEmail_(oldEmail);
+  if (!n) throw new Error('Name is required');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) throw new Error('Enter a valid Google email address');
+  const sh = sheet_('managers'), last = sh.getLastRow();
+  const vals = last > 1 ? sh.getRange(2, 1, last - 1, 2).getValues() : [];
+  if (vals.some((r) => normEmail_(r[1]) === em && em !== old)) throw new Error(em + ' is already a manager');
+  for (let i = 0; i < vals.length; i++) {
+    const rowName = String(vals[i][0]).trim().toLowerCase(), rowEmail = normEmail_(vals[i][1]);
+    if ((old && rowEmail === old) || (!old && !rowEmail && rowName === n.toLowerCase())) {
+      sh.getRange(i + 2, 1, 1, 2).setValues([[n, em]]);
+      return;
+    }
+  }
+  if (vals.length >= 10) throw new Error('There are already 10 managers');
+  sh.appendRow([n, em, new Date().toISOString(), me.name]);
+}
+function removeManager_(email, me, name) {
+  const em = normEmail_(email);
+  if (!em) { if (name) deleteWhere_('managers', 'Name', String(name).trim()); return; } // a row that never got an email
+  if (em === me.email) throw new Error("You can't remove yourself");
+  if (em === ownerEmail_()) throw new Error("The portal owner can't be removed");
+  deleteWhere_('managers', 'Email', em);
 }
 
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
@@ -148,7 +268,8 @@ function getAll_() {
     training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 8, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
     notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
     teamNotes: read_('teamNotes').map((n) => ({ id: n.ID, ts: n.Date, manager: n.Manager, text: n.Note, pinned: String(n.Pinned || '').toUpperCase() === 'Y', edited: n.Edited })),
-    settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: String(s.managers || '').split(/\s*[,;\n]\s*/).filter(String) }; })(),
+    managerList: readManagers_().map((m) => ({ name: m.name, email: m.email, owner: !!m.email && m.email === ownerEmail_() })),
+    settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: readManagers_().map((m) => m.name) }; })(),
   };
 }
 
@@ -225,17 +346,6 @@ function saveSkills_(skills) {
   if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
 }
 
-function managers_() { return String(readSettings_().managers || '').split(/\s*[,;\n]\s*/).filter(String); }
-function addManager_(name) {
-  const n = String(name || '').trim();
-  if (!n) throw new Error('Name is required');
-  const list = managers_();
-  if (list.some((m) => m.toLowerCase() === n.toLowerCase())) return;
-  if (list.length >= 3) throw new Error('There are already 3 managers');
-  setSetting_('managers', list.concat(n).join(', '));
-}
-function removeManager_(name) { setSetting_('managers', managers_().filter((m) => m !== name).join(', ')); }
-
 function teamNoteRow_(n, manager) {
   if (!n || !String(n.text || '').trim()) throw new Error('Note text is required');
   const old = n.id ? read_('teamNotes').find((r) => r.ID === n.id) : null;
@@ -286,7 +396,6 @@ function bumpRev_(by) { const p = PropertiesService.getScriptProperties(); p.set
 function saveSettings_(s) {
   if (s.teamName != null) setSetting_('teamName', String(s.teamName));
   if (s.reassessDays != null) setSetting_('reassessDays', String(Number(s.reassessDays) || 45));
-  if (s.managers != null) setSetting_('managers', (s.managers || []).slice(0, 10).join(', '));
 }
 
 /* ============================== sheet helpers ============================== */
