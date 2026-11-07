@@ -42,6 +42,7 @@
     sort: '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
     chat: '<path d="M4 5.5h16v11H9.5L5 20.5v-4H4z"/><path d="M8 9.5h8M8 12.5h5"/>',
     trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>',
+    logout: '<path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="M10 16.5 5.5 12 10 7.5M5.5 12H15"/>',
     pin: '<path d="M9 3.5h6l-1 6.5 3.5 3.5h-11L10 10z"/><path d="M12 13.5v7"/>',
     refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 3.5V8h4.5M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20.5V16h-4.5"/>',
     trophy: '<path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1.5A3.5 3.5 0 0 0 7.5 11M17 6h3v1.5a3.5 3.5 0 0 1-3.5 3.5M12 14v3.5M8.5 20.5h7l-.8-3h-5.4z"/>',
@@ -205,8 +206,11 @@
 
   /* ------------------------------------------------------------------ state */
   let DB = null;
-  let ME = store.get('tt-manager') || '';
-  let PW = store.get('tt-pw', true) || '';
+  // Live portal: ME comes from the Google account the server verified. Demo: picked on screen.
+  let ME = DEMO ? store.get('tt-manager') || '' : '';
+  let MEINFO = null; // { name, email, owner }
+  let TOKEN = DEMO ? '' : store.get('tt-session') || ''; // portal session (7 days), issued after Google sign-in
+  const LOGIN_URL = String(CFG.LOGIN_URL || '').trim();
   const ui = { teamFilter: 'all', teamQuery: '', teamSort: 'name', trainView: 'board', trainQuery: '', matrixCat: 'overview', openCats: {}, matrixQuery: '', vaTab: 'overview' };
   let C = null; // derived cache
   let REV = null; // server revision we last loaded (live sync)
@@ -221,6 +225,7 @@
     d.settings = Object.assign({ teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers: [] }, d.settings || {});
     if (typeof d.settings.managers === 'string') d.settings.managers = d.settings.managers.split(/\s*[,;\n]\s*/).filter(Boolean);
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
+    d.managerList = (d.managerList || d.settings.managers.map((n) => ({ name: n, email: '', owner: false }))).map((m) => Object.assign({ email: '', owner: false }, m));
     return d;
   }
 
@@ -312,10 +317,53 @@
   /* ------------------------------------------------------------------ API */
   async function api(action, payload) {
     if (DEMO) return { ok: true };
-    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action, password: PW, manager: ME }, payload || {})) });
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action, session: TOKEN }, payload || {})) });
     const j = await res.json();
-    if (!j.ok) throw new Error(j.error || 'Something went wrong');
+    if (!j.ok) {
+      const err = new Error(j.error || 'Something went wrong');
+      err.code = j.code;
+      if (j.code === 'signin' || j.code === 'denied') signOut(j.error, j.code === 'denied');
+      throw err;
+    }
+    if (j.me) setMe(j.me);
     return j;
+  }
+  function setMe(me) { MEINFO = me; ME = me.name; }
+
+  /* ------------------------------------------------------------------ Google sign-in
+     "Sign in with Google" opens the small Team Troy Sign-in script in a popup. Google confirms the account
+     there and the popup sends back a Google identity token; the portal's script checks it and the Managers
+     list, then returns a 7-day session. */
+  let loginPopup = null;
+  function startSignIn() {
+    const st = $('#login-status');
+    if (!LOGIN_URL) { if (st) st.textContent = 'Google sign-in is not set up yet (LOGIN_URL in config.js).'; return; }
+    const w = 480, h = 640, x = Math.max(0, (screen.width - w) / 2), y = Math.max(0, (screen.height - h) / 3);
+    loginPopup = window.open(LOGIN_URL, 'tt-login', `width=${w},height=${h},left=${x},top=${y}`);
+    if (!loginPopup) { if (st) st.textContent = 'Your browser blocked the sign-in window. Allow pop-ups for this site and try again.'; return; }
+    if (st) st.textContent = 'Finish signing in with Google in the window that opened…';
+  }
+  window.addEventListener('message', async (e) => {
+    if (!/^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/.test(e.origin) && e.origin !== 'https://script.google.com') return;
+    const m = e.data;
+    if (!m || m.type !== 'tt-login') return;
+    try { if (loginPopup) loginPopup.close(); } catch (x) {}
+    if (m.error || !m.idToken) return renderLogin('Google sign-in failed: ' + (m.error || 'no token'), true);
+    const st = $('#login-status'); if (st) st.textContent = 'Signing in as ' + (m.email || 'you') + '…';
+    try {
+      const j = await api('login', { idToken: m.idToken });
+      TOKEN = j.session; store.set('tt-session', TOKEN);
+      afterSignIn();
+    } catch (err) { if (err.code !== 'denied' && err.code !== 'signin') renderLogin(err.message, true); }
+  });
+  async function afterSignIn() {
+    const box = $('#login-status'); if (box) box.textContent = 'Signing in…';
+    try { await load(); render.keepScroll = false; render(); }
+    catch (err) { if (err.code !== 'denied' && err.code !== 'signin') renderLogin(err.message); }
+  }
+  function signOut(msg, denied) {
+    TOKEN = ''; store.del('tt-session'); ME = ''; MEINFO = null;
+    renderLogin(msg || '', denied);
   }
   let inflight = 0;
   async function save(action, payload, mutate, okMsg) {
@@ -341,7 +389,7 @@
   let polling = false, pending = null;
   const busy = () => { if ($('dialog[open]')) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
   async function poll(force) {
-    if (DEMO || !PW || !ME || !DB || polling || inflight) return;
+    if (DEMO || !TOKEN || !ME || !DB || polling || inflight) return;
     if (document.hidden && !force) return;
     polling = true;
     try {
@@ -352,7 +400,6 @@
       pending = { data: normalise(j.data), rev: j.rev || null };
       applyPending();
     } catch (err) {
-      if (/incorrect password/i.test(err.message)) { PW = ''; store.del('tt-pw', true); renderLogin('The manager password was changed. Please sign in again.'); }
     } finally { polling = false; }
   }
   function applyPending() {
@@ -409,8 +456,8 @@
           ${link({ id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' })}
         </nav>
         <div class="sidebar-foot">
-          <div class="me">${avatar({ id: 'm', name: ME })}<div><div class="me-name">${esc(ME)}</div><div class="me-role">Manager</div></div>
-          <button type="button" data-act="switch-manager" title="Switch manager" aria-label="Switch manager">${ic('swap')}</button></div>
+          <div class="me">${avatar({ id: 'm', name: ME })}<div style="min-width:0"><div class="me-name">${esc(ME)}</div><div class="me-role" title="${esc(MEINFO ? MEINFO.email : '')}">${esc(MEINFO ? MEINFO.email : 'Manager')}</div></div>
+          <button type="button" data-act="${DEMO ? 'switch-manager' : 'sign-out'}" title="${DEMO ? 'Switch manager' : 'Sign out'}" aria-label="${DEMO ? 'Switch manager' : 'Sign out'}">${ic(DEMO ? 'swap' : 'logout')}</button></div>
         </div>
       </aside>
       <div class="main">
@@ -427,7 +474,7 @@
 
   function render() {
     if (!DB) return;
-    if (!ME) return renderWho();
+    if (!ME) return DEMO ? renderWho() : renderLogin();
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
@@ -866,9 +913,17 @@
             <label class="field"><span>Team name</span><input class="input" name="teamName" value="${esc(s.teamName)}" required></label>
             <label class="field"><span>Re-rate every</span><select class="select" name="reassessDays">${[30, 45, 60, 90].map((d) => `<option value="${d}" ${s.reassessDays === d ? 'selected' : ''}>${d} days</option>`).join('')}</select><small>VAs not rated within this window appear under "Needs your attention".</small></label>
             <div><button class="btn btn-primary">Save</button></div></form></section>
-          <section class="card"><div class="card-head"><h2>Managers</h2><span class="sub">Up to 3 people use this portal</span></div>
-            <ul class="list">${s.managers.map((m) => `<li>${avatar({ id: 'm', name: m })}<div class="grow"><div class="title">${esc(m)}</div>${m === ME ? '<div class="meta">You</div>' : ''}</div>${s.managers.length > 1 && m !== ME ? `<button class="btn btn-sm btn-ghost btn-danger" data-act="del-manager" data-id="${esc(m)}">Remove</button>` : ''}</li>`).join('')}</ul>
-            ${s.managers.length < 3 ? `<form class="card-body" data-form="manager" style="display:flex;gap:8px;border-top:1px solid var(--line)"><label class="sr-only" for="mgr-name">Manager name</label><input class="input" id="mgr-name" name="name" placeholder="Full name" required><button class="btn">${ic('plus')}Add</button></form>` : ''}</section>
+          <section class="card"><div class="card-head"><h2>Managers</h2><span class="sub">Only these Google accounts can open the portal</span></div>
+            <ul class="list">${DB.managerList.map((m, i) => {
+              const you = MEINFO ? m.email && m.email === MEINFO.email : m.name === ME;
+              return `<li>${avatar({ id: 'm', name: m.name })}<div class="grow"><div class="title">${esc(m.name)} ${you ? '<span class="pill plain tone-info">You</span>' : ''}${m.owner ? ' <span class="pill plain tone-accent">Owner</span>' : ''}</div>
+                <div class="meta">${m.email ? esc(m.email) : '<span style="color:var(--warn);font-weight:600">No email yet — can\'t sign in</span>'}</div></div>
+                <button class="btn btn-sm btn-ghost" data-act="edit-manager" data-id="${i}">${ic('edit')}${m.email ? 'Edit' : 'Add email'}</button>
+                ${!you && !m.owner ? `<button class="btn btn-sm btn-ghost btn-danger" data-act="del-manager" data-id="${i}">Remove</button>` : ''}</li>`;
+            }).join('')}</ul>
+            <form class="card-body mgr-add" data-form="manager"><label class="field grow"><span>Name</span><input class="input" name="name" placeholder="Full name" required></label>
+              <label class="field grow"><span>Google email</span><input class="input" type="email" name="email" placeholder="name@gmail.com" required></label><button class="btn">${ic('plus')}Add manager</button></form>
+            <div class="card-body muted" style="border-top:1px solid var(--line);font-size:12.5px">They sign in with that Google account. Removing someone takes effect on their next sign-in (within an hour).</div></section>
           <section class="card"><div class="card-head"><h2>Appearance</h2></div><div class="card-body">
             <div class="seg" role="group" aria-label="Colour scheme">${[['system', `System (currently ${sysDark ? 'dark' : 'light'})`], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button type="button" aria-pressed="${currentScheme() === k}" data-act="scheme" data-id="${k}">${l}</button>`).join('')}</div></div></section>
           <section class="card"><div class="card-head"><h2>Data</h2></div><div class="card-body" style="display:flex;flex-direction:column;gap:8px">
@@ -892,9 +947,11 @@
         });
         const mf = $('[data-form="manager"]');
         if (mf) mf.addEventListener('submit', (e) => {
-          e.preventDefault(); const n = new FormData(e.target).get('name').trim(); if (!n) return;
-          const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.concat(n) });
-          save('addManager', { name: n }, () => { DB.settings = next; }, n + ' added as a manager');
+          e.preventDefault(); const f = new FormData(e.target);
+          const name = String(f.get('name') || '').trim(), email = String(f.get('email') || '').trim().toLowerCase();
+          if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a name and a valid Google email', true); return; }
+          if (DB.managerList.some((m) => m.email === email)) { toast(email + ' is already a manager', true); return; }
+          saveManagerRec(-1, { name, email });
         });
       },
     };
@@ -1216,20 +1273,16 @@
     $('#who').addEventListener('submit', (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) pick(n); });
   }
 
-  function renderLogin(err) {
+  function renderLogin(err, denied) {
     $('#app').innerHTML = `<div class="login"><div class="login-art"><a class="brand" style="padding:0">${MARK}<div><div class="brand-name">${esc(CFG.TEAM_NAME || 'Team Troy')}</div><div class="brand-sub">Training Portal</div></div></a>
       <div><h2>Grow every VA on the team.</h2><p>Rate skills, pair VAs with the right trainer and keep track of how everyone is doing.</p></div><div style="color:#8E99B3;font-size:12px">Managers only</div></div>
-      <div class="login-form"><form class="login-box" id="login"><div><h1>Sign in</h1><p class="muted" style="margin:6px 0 0">Enter the manager password.</p></div>
-        <label class="field"><span>Password</span><input class="input" type="password" name="pw" autocomplete="current-password" required autofocus></label>
-        <div class="err" role="alert">${esc(err || '')}</div><button class="btn btn-primary" style="padding:11px">Sign in</button></form></div></div>`;
-    $('#login').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      PW = new FormData(e.target).get('pw');
-      e.target.querySelector('button').textContent = 'Signing in…';
-      try { await load(); store.set('tt-pw', PW, true); render(); }
-      catch (err2) { PW = ''; renderLogin(err2.message); }
-    });
+      <div class="login-form"><div class="login-box" id="login"><div><h1>Sign in</h1><p class="muted" style="margin:6px 0 0">Use the Google account your manager added in Settings.</p></div>
+        ${err ? `<div class="err ${denied ? 'err-box' : ''}" role="alert">${esc(err)}</div>` : ''}
+        <button type="button" class="gsi-btn" id="gsi-btn">${GLOGO}<span>Sign in with Google</span></button>
+        <div id="login-status" class="muted" style="font-size:12.5px;min-height:18px"></div></div></div></div>`;
+    $('#gsi-btn').addEventListener('click', startSignIn);
   }
+  const GLOGO = '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.7-6c-2.2 1.5-5 2.3-8.2 2.3-6.2 0-11.5-4.1-13.4-9.7l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
 
   /* ------------------------------------------------------------------ global events */
   document.addEventListener('click', (e) => {
@@ -1265,10 +1318,13 @@
       case 'palette': return palette();
       case 'scheme': setScheme(id); return render();
       case 'switch-manager': ME = ''; store.del('tt-manager'); return render();
+      case 'sign-out': if (confirm('Sign out of the portal?')) signOut('You signed out.'); return;
+      case 'edit-manager': return managerDialog(Number(id));
       case 'del-manager': {
-        if (!confirm(`Remove ${id} as a manager?`)) return;
-        const next = Object.assign({}, DB.settings, { managers: DB.settings.managers.filter((m) => m !== id) });
-        return save('removeManager', { name: id }, () => { DB.settings = next; }, id + ' removed');
+        const m = DB.managerList[Number(id)]; if (!m) return;
+        if (!confirm(`Remove ${m.name}${m.email ? ' (' + m.email + ')' : ''} as a manager?\n\nThey won't be able to open the portal any more.`)) return;
+        const list = DB.managerList.filter((x) => x !== m);
+        return save('removeManager', { email: m.email, name: m.name }, () => { DB.managerList = list; DB.settings.managers = list.map((x) => x.name); }, m.name + ' removed');
       }
     }
   });
@@ -1304,14 +1360,36 @@
     if (confirm(`Delete the whole rating session for ${p.name}?\n\n${rows.length} skill rating${rows.length === 1 ? '' : 's'} by ${manager || 'a manager'} on ${fmt(rows[0].ts)}.\n\nThis cannot be undone.`)) deleteRatings(rows, `Deleted ${rows.length} rating${rows.length === 1 ? '' : 's'} for ${p.name}`);
   }
 
+  function saveManagerRec(i, rec) {
+    const old = i >= 0 ? DB.managerList[i] : null;
+    const list = DB.managerList.slice();
+    if (old) list[i] = Object.assign({}, old, rec); else list.push(Object.assign({ owner: false }, rec));
+    save('saveManager', { name: rec.name, email: rec.email, oldEmail: old ? old.email : '' }, () => { DB.managerList = list; DB.settings.managers = list.map((x) => x.name); },
+      old ? `${rec.name} updated` : `${rec.name} can now sign in with ${rec.email}`);
+  }
+  function managerDialog(i) {
+    const m = DB.managerList[i]; if (!m) return;
+    modal({
+      title: m.email ? 'Edit manager' : 'Add Google email', submit: 'Save',
+      body: `<label class="field"><span>Name</span><input class="input" name="name" required value="${esc(m.name)}"><small>Shown on ratings and notes they make.</small></label>
+        <label class="field"><span>Google email</span><input class="input" type="email" name="email" required value="${esc(m.email || '')}" placeholder="name@gmail.com" ${m.owner ? 'readonly' : ''}><small>${m.owner ? "The owner's email can't be changed." : 'The Google account they sign in with.'}</small></label>`,
+      onSubmit(f) {
+        const name = String(f.get('name') || '').trim(), email = String(f.get('email') || '').trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid Google email', true); return false; }
+        if (DB.managerList.some((x, j) => j !== i && x.email === email)) { toast(email + ' is already a manager', true); return false; }
+        saveManagerRec(i, { name, email });
+      },
+    });
+  }
+
   function newTeamNote() { ui.focusComposer = true; if (location.hash === '#/notes') render(); else { render.keepScroll = false; location.hash = '#/notes'; } }
 
   /* ------------------------------------------------------------------ boot */
   async function boot() {
     $('#app').innerHTML = '<div class="loading"><div><div class="spinner"></div>Loading Team Troy…</div></div>';
     if (DEMO) { await load(); if (PREVIEW && !ME) ME = DB.settings.managers[0]; return render(); }
-    if (!PW) return renderLogin();
-    try { await load(); render(); } catch (err) { PW = ''; store.del('tt-pw', true); renderLogin(err.message); }
+    if (!TOKEN) return renderLogin();
+    try { await load(); render(); } catch (err) { if (err.code !== 'denied' && err.code !== 'signin') renderLogin(err.message); }
   }
   boot();
 })();
