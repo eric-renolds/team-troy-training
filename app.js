@@ -444,6 +444,7 @@
 
   function shell(r, crumbs, body) {
     const section = r.page === 'va' ? 'team' : r.page;
+    const tabSection = section === 'users' ? 'settings' : section;
     const attn = derive().attention.length;
     const unread = unreadNotes().length;
     const link = (n, mobile) => `<a href="${n.href}" ${section === n.id ? 'aria-current="page"' : ''}>${ic(n.icon)}<span>${mobile && n.short ? n.short : n.label}</span>${!mobile && n.id === 'home' && attn ? `<span class="count" title="Items needing attention">${attn}</span>` : ''}${n.id === 'notes' && unread ? `<span class="${mobile ? 'dot-count' : 'count count-new'}" title="${unread} new note${unread === 1 ? '' : 's'}">${unread}</span>` : ''}</a>`;
@@ -453,6 +454,7 @@
         <nav class="nav" aria-label="Main">
           ${NAV.map((n) => link(n)).join('')}
           <div class="nav-label">Admin</div>
+          ${link({ id: 'users', href: '#/users', label: 'Users', icon: 'user' })}
           ${link({ id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' })}
         </nav>
         <div class="sidebar-foot">
@@ -478,7 +480,7 @@
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
-    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, settings: pageSettings };
+    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, users: pageUsers, settings: pageSettings };
     const fn = pages[r.page] || pageHome;
     const out = fn(r);
     const y = window.scrollY;
@@ -896,6 +898,55 @@
     });
   }
 
+  /* ------------------------------------------------------------------ Users
+     Who can sign in. Each manager signs in with the Google account (Gmail) listed here. */
+  function pageUsers() {
+    const list = DB.managerList;
+    const ready = list.filter((m) => m.email).length;
+    const body = `
+      <div class="page-head"><div><h1>Users</h1><p>Only the Google accounts listed here can sign in to the portal. Add a manager's Gmail and they can sign in straight away.</p></div></div>
+      <div class="grid grid-2e" style="align-items:start">
+        <section class="card"><div class="card-head"><h2>Managers</h2><span class="sub">${ready} of ${list.length} can sign in</span></div>
+          ${list.length ? `<ul class="list">${list.map((m, i) => {
+            const you = MEINFO ? m.email && m.email === MEINFO.email : m.name === ME;
+            return `<li>${avatar({ id: 'm', name: m.name })}<div class="grow"><div class="title">${esc(m.name)} ${you ? '<span class="pill plain tone-info">You</span>' : ''}${m.owner ? ' <span class="pill plain tone-accent">Owner</span>' : ''}</div>
+              <div class="meta">${m.email ? esc(m.email) : '<span style="color:var(--warn);font-weight:600">No Gmail yet — can\'t sign in</span>'}</div></div>
+              <button class="btn btn-sm ${m.email ? 'btn-ghost' : ''}" data-act="edit-manager" data-id="${i}">${ic('edit')}${m.email ? 'Edit' : 'Add Gmail'}</button>
+              ${!you && !m.owner ? `<button class="btn btn-sm btn-ghost btn-danger" data-act="del-manager" data-id="${i}">Remove</button>` : ''}</li>`;
+          }).join('')}</ul>` : '<div class="empty">No managers yet.</div>'}
+        </section>
+        <div class="stack">
+          <section class="card"><div class="card-head"><h2>Add a manager</h2></div>
+            <form class="card-body" data-form="manager" style="display:flex;flex-direction:column;gap:14px">
+              <label class="field"><span>Name</span><input class="input" name="name" placeholder="e.g. Jeff Hardy" required autocomplete="off"><small>Shown on the ratings and notes they make.</small></label>
+              <label class="field"><span>Gmail / Google account</span><input class="input" type="email" name="email" placeholder="name@gmail.com" required autocomplete="off"><small>The Google account they will sign in with.</small></label>
+              <div><button class="btn btn-primary">${ic('plus')}Add manager</button></div>
+            </form></section>
+          <section class="card card-pad"><h3 class="mini-title">How it works</h3>
+            <ul class="how">
+              <li>They open the portal link and click <b>Sign in with Google</b>.</li>
+              <li>The first time, Google asks them to allow the portal to see their email address.</li>
+              <li>Removing someone locks them out right away.</li>
+              <li>The Google account that owns the portal (marked <b>Owner</b>) always has access.</li>
+            </ul></section>
+        </div>
+      </div>`;
+    return {
+      title: 'Users', crumbs: '<b>Users</b>', body,
+      after() {
+        $('[data-form="manager"]').addEventListener('submit', (e) => {
+          e.preventDefault(); const f = new FormData(e.target);
+          const name = String(f.get('name') || '').trim(), email = String(f.get('email') || '').trim().toLowerCase();
+          if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a name and a valid Gmail address', true); return; }
+          if (DB.managerList.some((m) => m.email === email)) { toast(email + ' is already a manager', true); return; }
+          // If this name is already listed without a Gmail, fill theirs in instead of adding a duplicate.
+          const i = DB.managerList.findIndex((m) => !m.email && m.name.toLowerCase() === name.toLowerCase());
+          saveManagerRec(i, { name, email });
+        });
+      },
+    };
+  }
+
   /* ------------------------------------------------------------------ Settings */
   function currentScheme() { const m = $('meta[name="color-scheme"]'); return m.content === 'light' || m.content === 'dark' ? m.content : 'system'; }
   function setScheme(v) {
@@ -913,17 +964,8 @@
             <label class="field"><span>Team name</span><input class="input" name="teamName" value="${esc(s.teamName)}" required></label>
             <label class="field"><span>Re-rate every</span><select class="select" name="reassessDays">${[30, 45, 60, 90].map((d) => `<option value="${d}" ${s.reassessDays === d ? 'selected' : ''}>${d} days</option>`).join('')}</select><small>VAs not rated within this window appear under "Needs your attention".</small></label>
             <div><button class="btn btn-primary">Save</button></div></form></section>
-          <section class="card"><div class="card-head"><h2>Managers</h2><span class="sub">Only these Google accounts can open the portal</span></div>
-            <ul class="list">${DB.managerList.map((m, i) => {
-              const you = MEINFO ? m.email && m.email === MEINFO.email : m.name === ME;
-              return `<li>${avatar({ id: 'm', name: m.name })}<div class="grow"><div class="title">${esc(m.name)} ${you ? '<span class="pill plain tone-info">You</span>' : ''}${m.owner ? ' <span class="pill plain tone-accent">Owner</span>' : ''}</div>
-                <div class="meta">${m.email ? esc(m.email) : '<span style="color:var(--warn);font-weight:600">No email yet — can\'t sign in</span>'}</div></div>
-                <button class="btn btn-sm btn-ghost" data-act="edit-manager" data-id="${i}">${ic('edit')}${m.email ? 'Edit' : 'Add email'}</button>
-                ${!you && !m.owner ? `<button class="btn btn-sm btn-ghost btn-danger" data-act="del-manager" data-id="${i}">Remove</button>` : ''}</li>`;
-            }).join('')}</ul>
-            <form class="card-body mgr-add" data-form="manager"><label class="field grow"><span>Name</span><input class="input" name="name" placeholder="Full name" required></label>
-              <label class="field grow"><span>Google email</span><input class="input" type="email" name="email" placeholder="name@gmail.com" required></label><button class="btn">${ic('plus')}Add manager</button></form>
-            <div class="card-body muted" style="border-top:1px solid var(--line);font-size:12.5px">They sign in with that Google account. Removing someone takes effect on their next sign-in (within an hour).</div></section>
+          <section class="card"><div class="card-head"><h2>Users</h2><span class="sub">${DB.managerList.length} manager${DB.managerList.length === 1 ? '' : 's'} can sign in</span><a class="btn btn-sm right" href="#/users">${ic('user')}Manage users</a></div>
+            <div class="card-body muted" style="font-size:13px">Add or remove the Gmail accounts that can sign in on the Users page.</div></section>
           <section class="card"><div class="card-head"><h2>Appearance</h2></div><div class="card-body">
             <div class="seg" role="group" aria-label="Colour scheme">${[['system', `System (currently ${sysDark ? 'dark' : 'light'})`], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button type="button" aria-pressed="${currentScheme() === k}" data-act="scheme" data-id="${k}">${l}</button>`).join('')}</div></div></section>
           <section class="card"><div class="card-head"><h2>Data</h2></div><div class="card-body" style="display:flex;flex-direction:column;gap:8px">
@@ -944,14 +986,6 @@
           e.preventDefault(); const f = new FormData(e.target);
           const next = Object.assign({}, DB.settings, { teamName: f.get('teamName').trim(), reassessDays: Number(f.get('reassessDays')) });
           save('saveSettings', { settings: { teamName: next.teamName, reassessDays: next.reassessDays } }, () => { DB.settings = next; }, 'Settings saved');
-        });
-        const mf = $('[data-form="manager"]');
-        if (mf) mf.addEventListener('submit', (e) => {
-          e.preventDefault(); const f = new FormData(e.target);
-          const name = String(f.get('name') || '').trim(), email = String(f.get('email') || '').trim().toLowerCase();
-          if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a name and a valid Google email', true); return; }
-          if (DB.managerList.some((m) => m.email === email)) { toast(email + ' is already a manager', true); return; }
-          saveManagerRec(-1, { name, email });
         });
       },
     };
@@ -1224,7 +1258,7 @@
     d.innerHTML = `<div class="palette-input">${ic('search')}<input type="text" placeholder="Search VAs, pages or actions…" aria-label="Search" autocomplete="off"></div><ul class="palette-list" role="listbox"></ul>`;
     document.body.appendChild(d);
     const input = $('input', d), list = $('ul', d);
-    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Settings', '#/settings']];
+    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Users', '#/users'], ['Settings', '#/settings']];
     const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()], ['Post a team note', () => newTeamNote()]];
     let items = [], sel = 0;
     const draw = () => {
