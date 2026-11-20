@@ -651,3 +651,8 @@ details.group.compact .g-body { padding: 0 0 10px 26px; }
 .me-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
 
 .how { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; color: var(--ink-2); }
+
+/* VA view */
+.topbar .right { margin-left: auto; }
+.va-signout { display: none; }
+@media (max-width: 860px) { .va-signout { display: inline-flex; } }

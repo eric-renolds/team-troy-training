@@ -25,7 +25,7 @@ const SHEET_ID = '1IGhyXRyjX0BneNg94zqsoXRkriQJb2adwQIDbWqaSHQ';
 function ss_() { return SpreadsheetApp.openById(SHEET_ID); }
 
 const TABS = {
-  team: { name: 'VA Team', headers: ['ID', 'Name', 'Role', 'Account', 'Start', 'Active'] },
+  team: { name: 'VA Team', headers: ['ID', 'Name', 'Role', 'Account', 'Start', 'Active', 'Email'] },
   skills: { name: 'Skill List', headers: ['Skill', 'Category', 'Active'] },
   ratings: { name: 'Skill Ratings', headers: ['Timestamp', 'Person ID', 'Person', 'Skill', 'Score', 'Manager', 'Note'] },
   training: { name: 'Trainings', headers: ['ID', 'Trainee ID', 'Trainee', 'Trainer ID', 'Trainer', 'Skills', 'Target', 'Start', 'Due', 'Status', 'Notes', 'Created', 'Updated'] },
@@ -125,6 +125,12 @@ function doPost(e) {
   req.manager = me.name; // every change is recorded under the signed-in manager
   try {
     if (req.action === 'whoami') return json_({ ok: true, me: me });
+    if (me.role === 'va') {
+      // VAs can only read their own page. Nothing about other people is ever sent to them.
+      if (req.action === 'getAll') return json_({ ok: true, data: getMine_(me), rev: rev_(), me: me });
+      if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
+      return json_({ ok: false, error: "You don't have permission to do that.", code: 'forbidden' });
+    }
     if (req.action === 'getAll') { ensureScale10_(); migrateManagers_(); return json_({ ok: true, data: getAll_(), rev: rev_(), me: me }); }
     if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
     const lock = LockService.getScriptLock();
@@ -161,12 +167,15 @@ function authError_(msg, code) { const e = new Error(msg); e.code = code; return
 function normEmail_(e) { return String(e || '').trim().toLowerCase(); }
 function ownerEmail_() { try { return normEmail_(Session.getEffectiveUser().getEmail()); } catch (e) { return ''; } }
 
-// Who may use the portal: anyone on the Managers tab with an email, plus the script owner.
+// Who may use the portal: managers (Managers tab + the script owner) get everything;
+// active VAs whose Gmail is on the VA Team tab get only their own page.
 function managerFor_(email, googleName) {
   const row = readManagers_().find((m) => m.email === email);
   const owner = email === ownerEmail_();
-  if (!row && !owner) throw authError_(email + " doesn't have access to this portal. Ask a manager to add this email in Settings → Managers.", 'denied');
-  return { email: email, name: row ? row.name : (googleName || email), owner: owner };
+  if (row || owner) return { email: email, name: row ? row.name : (googleName || email), owner: owner, role: 'manager' };
+  const va = read_('team').find((p) => normEmail_(p.Email) === email && String(p.Active || 'Y').toUpperCase() !== 'N');
+  if (va) return { email: email, name: va.Name, owner: false, role: 'va', personId: va.ID };
+  throw authError_(email + " doesn't have access to this portal. Ask your manager to add this Gmail to your profile.", 'denied');
 }
 
 // 'login': checks Google's identity token (from the Team Troy Sign-in script) and the Managers list.
@@ -262,7 +271,7 @@ function getAll_() {
   const team = read_('team'), byId = {};
   team.forEach((p) => (byId[p.ID] = p));
   return {
-    people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
+    people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y', email: normEmail_(p.Email) })),
     skills: read_('skills').map((s) => ({ name: s.Skill, category: s.Category || 'Other', active: String(s.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
     ratings: read_('ratings').map((r) => ({ ts: r.Timestamp, personId: r['Person ID'], skill: r.Skill, score: Number(r.Score), manager: r.Manager, note: r.Note })),
     training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 8, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
@@ -273,13 +282,39 @@ function getAll_() {
   };
 }
 
+// A VA's own page: their profile, and the trainings they are part of (as trainee or as trainer).
+// No ratings, targets, notes, other VAs or manager data.
+function getMine_(me) {
+  const team = read_('team'), byId = {};
+  team.forEach((p) => (byId[p.ID] = p));
+  const self = byId[me.personId] || {};
+  const nameOf = (id) => (byId[id] ? byId[id].Name : '');
+  const roleOf = (id) => (byId[id] ? byId[id].Role || 'VA' : '');
+  const active = (id) => byId[id] && String(byId[id].Active || 'Y').toUpperCase() !== 'N';
+  const mine = read_('training').filter((t) => (t['Trainee ID'] === me.personId || t['Trainer ID'] === me.personId) && active(t['Trainee ID']) && active(t['Trainer ID']));
+  return {
+    va: true,
+    profile: { id: self.ID, name: self.Name, role: self.Role || 'VA', account: self.Account || '', start: self.Start || '' },
+    training: mine.map((t) => {
+      const asTrainee = t['Trainee ID'] === me.personId, other = asTrainee ? t['Trainer ID'] : t['Trainee ID'];
+      return { id: t.ID, as: asTrainee ? 'trainee' : 'trainer', with: nameOf(other), withRole: roleOf(other), skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), start: t.Start, due: t.Due, status: t.Status || 'Planned' };
+    }),
+    settings: { teamName: readSettings_().teamName || 'Team Troy' },
+  };
+}
+
 /* ============================== write ============================== */
 
 function nameOf_(id) { const p = read_('team').find((r) => r.ID === id); return p ? p.Name : ''; }
 
 function personRow_(p) {
   if (!p || !String(p.name || '').trim()) throw new Error('Name is required');
-  return { ID: p.id || id_('p'), Name: String(p.name).trim(), Role: p.role || 'VA', Account: p.account || '', Start: p.start || '', Active: p.active === 'N' ? 'N' : 'Y' };
+  // Missing email field (e.g. an older portal tab) keeps the saved Gmail instead of clearing it.
+  const old = p.email === undefined && p.id ? read_('team').find((r) => r.ID === p.id) : null;
+  const email = old ? normEmail_(old.Email) : normEmail_(p.email);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid Gmail address');
+  if (email && read_('team').some((r) => normEmail_(r.Email) === email && r.ID !== p.id)) throw new Error(email + ' is already used by another VA');
+  return { ID: p.id || id_('p'), Name: String(p.name).trim(), Role: p.role || 'VA', Account: p.account || '', Start: p.start || '', Active: p.active === 'N' ? 'N' : 'Y', Email: email };
 }
 
 function saveRatings_(rows, note) {
@@ -400,9 +435,21 @@ function saveSettings_(s) {
 
 /* ============================== sheet helpers ============================== */
 
+const headersChecked_ = {};
 function sheet_(key) {
   const t = TABS[key], ss = ss_();
   let sh = ss.getSheetByName(t.name);
+  if (sh && !headersChecked_[key]) {
+    // Older tabs may be missing newer columns (e.g. Email on VA Team): add them at the end.
+    headersChecked_[key] = true;
+    const width = Math.max(1, sh.getLastColumn());
+    const have = sh.getRange(1, 1, 1, width).getValues()[0].map(String);
+    const missing = t.headers.filter((h) => have.indexOf(h) < 0);
+    if (missing.length) {
+      sh.getRange(1, width + 1, 1, missing.length).setValues([missing]).setFontWeight('bold').setBackground('#14213D').setFontColor('#F3E2C0');
+      sh.getRange(1, width + 1, sh.getMaxRows(), missing.length).setNumberFormat('@');
+    }
+  }
   if (!sh) {
     sh = ss.insertSheet(t.name);
     sh.getRange(1, 1, 1, t.headers.length).setValues([t.headers]).setFontWeight('bold').setBackground('#14213D').setFontColor('#F3E2C0');

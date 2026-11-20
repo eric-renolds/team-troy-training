@@ -216,6 +216,7 @@
   let REV = null; // server revision we last loaded (live sync)
 
   function normalise(d) {
+    if (d && d.va) return d; // a VA's own page data (see renderVA)
     d.people = (d.people || []).map((p) => Object.assign({ role: 'VA', account: '', active: 'Y' }, p));
     d.skills = d.skills || [];
     d.ratings = (d.ratings || []).map((r) => Object.assign({}, r, { score: Number(r.score) })).filter((r) => r.score >= 1 && r.score <= MAX);
@@ -406,7 +407,7 @@
     if (!pending || busy()) return;
     const { data, rev } = pending; pending = null;
     const prevNotes = new Set((DB.teamNotes || []).map((n) => n.id));
-    const fromOther = rev && rev.by && rev.by !== ME;
+    const fromOther = rev && rev.by && rev.by !== ME && !data.va;
     DB = data; REV = rev; invalidate();
     render();
     if (fromOther) {
@@ -477,6 +478,7 @@
   function render() {
     if (!DB) return;
     if (!ME) return DEMO ? renderWho() : renderLogin();
+    if (DB.va) return renderVA();
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
@@ -683,7 +685,7 @@
     const body = `
       <section class="card" style="margin-bottom:20px">
         <div class="profile-head">${avatar(p, 'lg')}
-          <div><h1>${esc(p.name)}</h1><div class="meta"><span>${esc(p.role)}</span><span>${esc(p.account || 'No account')}</span><span>Since ${fmt(p.start)}</span>${p.active === 'N' ? '<span class="pill tone-bad">Inactive</span>' : '<span class="pill tone-good">Active</span>'}</div></div>
+          <div><h1>${esc(p.name)}</h1><div class="meta"><span>${esc(p.role)}</span><span>${esc(p.account || 'No account')}</span><span>Since ${fmt(p.start)}</span><span title="${p.email ? 'Can sign in to their VA page with this Gmail' : 'No Gmail set, so they cannot sign in'}">${p.email ? esc(p.email) : 'No Gmail'}</span>${p.active === 'N' ? '<span class="pill tone-bad">Inactive</span>' : '<span class="pill tone-good">Active</span>'}</div></div>
           <div class="actions"><button class="btn btn-ghost btn-danger" data-act="remove-person" data-id="${esc(p.id)}">${ic('x')}Remove</button><button class="btn" data-act="edit-person" data-id="${esc(p.id)}">${ic('edit')}Edit</button><button class="btn" data-act="note" data-id="${esc(p.id)}">${ic('note')}Add note</button><button class="btn" data-act="assign" data-id="${esc(p.id)}">${ic('training')}Assign trainer</button><button class="btn btn-primary" data-act="rate" data-id="${esc(p.id)}">${ic('star')}Rate skills</button></div>
         </div>
         <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-act="go" data-id="#/va/${esc(p.id)}/${k}">${l}</button>`).join('')}</div>
@@ -896,6 +898,41 @@
         save('saveTeamNote', { teamNote: rec }, () => { DB.teamNotes = DB.teamNotes.map((x) => (x.id === id ? rec : x)); }, 'Note updated');
       },
     });
+  }
+
+  /* ------------------------------------------------------------------ VA view ("My Portal")
+     What a signed-in VA sees. The server only sends their own profile and the trainings they are in:
+     no ratings, targets, notes, other VAs or manager data ever reach this page. */
+  function renderVA() {
+    const d = DB, p = d.profile || {};
+    const mine = (d.training || []).filter((t) => t.as === 'trainee'), teach = (d.training || []).filter((t) => t.as === 'trainer');
+    const open = (l) => l.filter((t) => t.status !== 'Completed').sort((a, b) => (a.due < b.due ? -1 : 1));
+    const done = (l) => l.filter((t) => t.status === 'Completed');
+    const item = (t) => `<li>${avatar({ id: t.with, name: t.with })}<div class="grow"><div class="title">${esc(t.as === 'trainee' ? 'Trainer: ' : 'Trainee: ')}${esc(t.with || '—')} <span class="role-tag">${esc(t.withRole || '')}</span></div>
+      <div class="chips" style="margin-top:6px">${t.skills.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div></div>
+      <div style="text-align:right"><span class="pill ${STATUS_TONE[t.status] || 'tone-info'}">${esc(t.status)}</span><div class="meta" style="${t.status !== 'Completed' && t.due && daysSince(t.due) > 0 ? 'color:var(--bad);font-weight:600' : ''}">${t.status === 'Completed' ? 'Done' : t.due ? (daysSince(t.due) > 0 ? 'Overdue · ' : 'Due ') + fmtShort(t.due) : ''}</div></div></li>`;
+    const section = (title, sub, list, empty) => `<section class="card"><div class="card-head"><h2>${title}</h2><span class="sub">${sub}</span></div>${list.length ? `<ul class="list">${list.map(item).join('')}</ul>` : `<div class="empty">${empty}</div>`}</section>`;
+    const first = String(p.name || ME).split(' ')[0];
+    $('#app').innerHTML = `<div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="#/">${MARK}<div><div class="brand-name">${esc(d.settings.teamName)}</div><div class="brand-sub">Training Portal</div></div></a>
+        <nav class="nav" aria-label="Main"><a href="#/" aria-current="page">${ic('home')}<span>My portal</span></a></nav>
+        <div class="sidebar-foot"><div class="me">${avatar({ id: 'm', name: ME })}<div style="min-width:0"><div class="me-name">${esc(ME)}</div><div class="me-role" title="${esc(MEINFO ? MEINFO.email : '')}">${esc(p.role || 'VA')}</div></div>
+          <button type="button" data-act="sign-out" title="Sign out" aria-label="Sign out">${ic('logout')}</button></div></div>
+      </aside>
+      <div class="main">
+        <header class="topbar"><a class="mobile-brand" href="#/">${MARK}<b>${esc(d.settings.teamName)}</b></a><span class="right"><button type="button" class="btn btn-sm btn-ghost va-signout" data-act="sign-out">${ic('logout')}Sign out</button></span></header>
+        <main class="page" id="page">
+          <section class="hero"><div><h1>${greeting()}, ${esc(first)}</h1><p>${fmt(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(p.role || 'VA')}${p.account ? ' · ' + esc(p.account) : ''}</p></div></section>
+          <div class="grid grid-2e" style="align-items:start;margin-bottom:20px">
+            ${section('My training', 'Skills you are learning', open(mine), 'No training assigned right now.')}
+            ${teach.length ? section('Training others', 'VAs you are helping', open(teach), 'Nobody to train right now.') : `<section class="card"><div class="card-head"><h2>Quizzes</h2><span class="sub">Coming soon</span></div><div class="card-body muted">Practice quizzes and skill assessments will appear here, one for each skill guidebook.</div></section>`}
+          </div>
+          ${teach.length ? `<section class="card" style="margin-bottom:20px"><div class="card-head"><h2>Quizzes</h2><span class="sub">Coming soon</span></div><div class="card-body muted">Practice quizzes and skill assessments will appear here, one for each skill guidebook.</div></section>` : ''}
+          ${done(mine).length + done(teach).length ? section('Completed', 'Finished trainings', done(mine).concat(done(teach)), '') : ''}
+        </main>
+      </div></div>`;
+    document.title = 'My portal · ' + d.settings.teamName + ' Training Portal';
   }
 
   /* ------------------------------------------------------------------ Users
@@ -1210,11 +1247,15 @@
         <div class="row2"><label class="field"><span>Role</span><select class="select" name="role">${(p && !ROLES.includes(p.role) ? [p.role].concat(ROLES) : ROLES).map((r) => `<option ${(p ? p.role : DEFAULT_ROLE) === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
           <label class="field"><span>Client / account</span><input class="input" name="account" value="${esc(p ? p.account : '')}"></label></div>
         <div class="row2"><label class="field"><span>Start date</span><input class="input" type="date" name="start" value="${esc(p ? p.start : isoDay(new Date()))}"></label>
-          <label class="field"><span>Status</span><select class="select" name="active"><option value="Y" ${!p || p.active !== 'N' ? 'selected' : ''}>Active</option><option value="N" ${p && p.active === 'N' ? 'selected' : ''}>Inactive</option></select></label></div>`,
+          <label class="field"><span>Status</span><select class="select" name="active"><option value="Y" ${!p || p.active !== 'N' ? 'selected' : ''}>Active</option><option value="N" ${p && p.active === 'N' ? 'selected' : ''}>Inactive</option></select></label></div>
+        <label class="field"><span>Gmail <span class="muted" style="font-weight:400">(optional)</span></span><input class="input" type="email" name="email" value="${esc(p ? p.email || '' : '')}" placeholder="name@gmail.com" autocomplete="off"><small>Lets this VA sign in to see their own training and quizzes. They never see ratings, notes or other VAs. Leave empty to keep them out.</small></label>`,
       onSubmit(f) {
         const name = String(f.get('name')).trim().replace(/\s+/g, ' ');
         if (DB.people.some((x) => x.name.toLowerCase() === name.toLowerCase() && (!p || x.id !== p.id))) { toast(name + ' is already on the team', true); return false; }
-        const rec = Object.assign({}, p || { id: 'p' + uid() }, { name, role: f.get('role'), account: String(f.get('account')).trim(), start: f.get('start'), active: f.get('active') });
+        const email = String(f.get('email') || '').trim().toLowerCase();
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid Gmail address', true); return false; }
+        if (email && DB.people.some((x) => x.email === email && (!p || x.id !== p.id))) { toast(email + ' is already used by another VA', true); return false; }
+        const rec = Object.assign({}, p || { id: 'p' + uid() }, { name, role: f.get('role'), account: String(f.get('account')).trim(), start: f.get('start'), active: f.get('active'), email });
         save('savePerson', { person: rec }, () => { DB.people = DB.people.filter((x) => x.id !== rec.id).concat(rec); }, p ? 'Saved' : name + ' added');
         if (!p) { render.keepScroll = false; location.hash = '#/va/' + rec.id; }
       },
@@ -1310,7 +1351,7 @@
   function renderLogin(err, denied) {
     $('#app').innerHTML = `<div class="login"><div class="login-art"><a class="brand" style="padding:0">${MARK}<div><div class="brand-name">${esc(CFG.TEAM_NAME || 'Team Troy')}</div><div class="brand-sub">Training Portal</div></div></a>
       <div><h2>Grow every VA on the team.</h2><p>Rate skills, pair VAs with the right trainer and keep track of how everyone is doing.</p></div><div style="color:#8E99B3;font-size:12px">Managers only</div></div>
-      <div class="login-form"><div class="login-box" id="login"><div><h1>Sign in</h1><p class="muted" style="margin:6px 0 0">Use the Google account your manager added in Settings.</p></div>
+      <div class="login-form"><div class="login-box" id="login"><div><h1>Sign in</h1><p class="muted" style="margin:6px 0 0">Use the Gmail account your manager added for you.</p></div>
         ${err ? `<div class="err ${denied ? 'err-box' : ''}" role="alert">${esc(err)}</div>` : ''}
         <button type="button" class="gsi-btn" id="gsi-btn">${GLOGO}<span>Sign in with Google</span></button>
         <div id="login-status" class="muted" style="font-size:12.5px;min-height:18px"></div></div></div></div>`;
@@ -1363,7 +1404,7 @@
     }
   });
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (DB && ME && !$('dialog[open]')) palette(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (DB && ME && !DB.va && !$('dialog[open]')) palette(); }
     if (e.key === 'Enter' && e.target.matches('.tcard')) e.target.click();
   });
   document.addEventListener('toggle', (e) => { const g = e.target; if (g.matches && g.matches('#page details.group[data-cat]')) ui.openCats[g.dataset.cat] = g.open; }, true);
