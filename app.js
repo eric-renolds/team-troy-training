@@ -42,6 +42,10 @@
     sort: '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
     chat: '<path d="M4 5.5h16v11H9.5L5 20.5v-4H4z"/><path d="M8 9.5h8M8 12.5h5"/>',
     trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>',
+    book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7.5h8M8 11h6"/>',
+    download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 19.5h15"/>',
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+    upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4.5 19.5h15"/>',
     logout: '<path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="M10 16.5 5.5 12 10 7.5M5.5 12H15"/>',
     pin: '<path d="M9 3.5h6l-1 6.5 3.5 3.5h-11L10 10z"/><path d="M12 13.5v7"/>',
     refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 3.5V8h4.5M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20.5V16h-4.5"/>',
@@ -226,6 +230,7 @@
     d.settings = Object.assign({ teamName: CFG.TEAM_NAME || 'Team Troy', reassessDays: 45, managers: [] }, d.settings || {});
     if (typeof d.settings.managers === 'string') d.settings.managers = d.settings.managers.split(/\s*[,;\n]\s*/).filter(Boolean);
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
+    d.docs = d.docs || [];
     d.managerList = (d.managerList || d.settings.managers.map((n) => ({ name: n, email: '', owner: false }))).map((m) => Object.assign({ email: '', owner: false }, m));
     return d;
   }
@@ -437,6 +442,7 @@
     { id: 'training', href: '#/training', label: 'Training', icon: 'training' },
     { id: 'matrix', href: '#/matrix', label: 'Skill matrix', icon: 'matrix', short: 'Matrix' },
     { id: 'notes', href: '#/notes', label: 'Team notes', icon: 'chat', short: 'Notes' },
+    { id: 'guides', href: '#/guides', label: 'Guidebooks', icon: 'book', short: 'Guides' },
   ];
   function route() {
     const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').filter(Boolean);
@@ -482,7 +488,7 @@
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
-    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, users: pageUsers, settings: pageSettings };
+    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, guides: pageGuides, users: pageUsers, settings: pageSettings };
     const fn = pages[r.page] || pageHome;
     const out = fn(r);
     const y = window.scrollY;
@@ -900,6 +906,113 @@
     });
   }
 
+  /* ------------------------------------------------------------------ Guidebooks
+     Files sit in a private Drive folder; the portal fetches them through the API for signed-in people only.
+     Managers upload, edit, replace and remove; VAs read and download what is shared with everyone. */
+  const DOC_GROUPS = ['Skill guidebooks', 'Scripts', 'Role & company'];
+  const docCache = {};
+  const fmtSize = (b) => (!b ? '' : b < 1024 * 1024 ? Math.max(1, Math.round(b / 1024)) + ' KB' : (b / 1024 / 1024).toFixed(1) + ' MB');
+  const docGroups = (docs) => { const g = []; docs.forEach((d) => { if (!g.includes(d.group)) g.push(d.group); }); return g.sort((a, b) => (DOC_GROUPS.indexOf(a) + 1 || 99) - (DOC_GROUPS.indexOf(b) + 1 || 99)); };
+  function guidesHtml(docs, admin) {
+    const q = (ui.docQuery || '').trim().toLowerCase();
+    const list = docs.filter((d) => !q || (d.title + ' ' + d.group).toLowerCase().includes(q));
+    if (!docs.length) return `<section class="card"><div class="empty"><b>No documents yet</b>${admin ? 'Upload the first guidebook with the button above.' : 'Your manager hasn\'t added any guidebooks yet.'}</div></section>`;
+    if (!list.length) return '<section class="card"><div class="empty"><b>Nothing matches</b>Try a different search.</div></section>';
+    return docGroups(list).map((g) => `<section class="card" style="margin-bottom:20px"><div class="card-head"><h2>${esc(g)}</h2><span class="sub">${list.filter((d) => d.group === g).length}</span></div>
+      <ul class="list docs">${list.filter((d) => d.group === g).map((d) => `<li>
+        <span class="doc-ico">${ic('book')}</span>
+        <div class="grow"><div class="title">${esc(d.title)}${admin && d.audience === 'managers' ? ' <span class="pill plain tone-warn">Managers & AEs only</span>' : ''}</div>
+          <div class="meta">${[d.pages ? d.pages + ' pages' : '', fmtSize(d.size), /pdf/i.test(d.type || d.name) ? 'PDF' : String(d.name || '').split('.').pop().toUpperCase()].filter(Boolean).join(' · ')}</div></div>
+        <div class="doc-actions">
+          ${/pdf/i.test(d.type || d.name) ? `<button class="btn btn-sm" data-act="doc-read" data-id="${esc(d.id)}">${ic('eye')}Read</button>` : ''}
+          <button class="btn btn-sm ${admin ? 'btn-ghost' : ''}" data-act="doc-download" data-id="${esc(d.id)}">${ic('download')}<span class="hide-sm">Download</span></button>
+          ${admin ? `<button class="icon-btn" data-act="doc-edit" data-id="${esc(d.id)}" aria-label="Edit ${esc(d.title)}" title="Edit, replace or remove">${ic('edit')}</button>` : ''}
+        </div></li>`).join('')}</ul></section>`).join('');
+  }
+  function pageGuides() {
+    const body = `
+      <div class="page-head"><div><h1>Guidebooks</h1><p>Training guidebooks and documents. VAs can read and download everything except files marked "Managers & AEs only".</p></div>
+        <div class="actions"><button class="btn btn-primary" data-act="doc-upload">${ic('upload')}Upload</button></div></div>
+      <div class="toolbar"><label class="search-field">${ic('search')}<span class="sr-only">Search documents</span><input class="input" id="doc-q" type="search" placeholder="Search guidebooks" value="${esc(ui.docQuery || '')}"></label>
+        <span class="muted" style="margin-left:auto">${DB.docs.length} document${DB.docs.length === 1 ? '' : 's'} · stored privately in Google Drive</span></div>
+      <div id="docs-list">${guidesHtml(DB.docs, true)}</div>`;
+    return { title: 'Guidebooks', crumbs: '<b>Guidebooks</b>', body, after() { $('#doc-q').addEventListener('input', (e) => { ui.docQuery = e.target.value; $('#docs-list').innerHTML = guidesHtml(DB.docs, true); }); } };
+  }
+  const docList = () => (DB && DB.docs) || [];
+  async function fetchDoc(id) {
+    if (docCache[id]) return docCache[id];
+    const j = await api('getDoc', { id });
+    const bin = atob(j.doc.data), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: j.doc.type || 'application/octet-stream' }));
+    return (docCache[id] = { url, name: j.doc.name, title: j.doc.title, type: j.doc.type });
+  }
+  async function withDoc(id, btn, fn) {
+    const old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span>Opening…'; }
+    try { fn(await fetchDoc(id)); } catch (e) { toast(e.message || 'Could not open the document', true); }
+    finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
+  }
+  function downloadDoc(f) { const a = document.createElement('a'); a.href = f.url; a.download = f.name || f.title; document.body.appendChild(a); a.click(); a.remove(); }
+  function readDoc(f) {
+    if (window.innerWidth < 760) { window.open(f.url, '_blank'); return; } // phones: use the built-in PDF viewer
+    const d = document.createElement('dialog');
+    d.className = 'modal reader';
+    d.innerHTML = `<div class="modal-head"><div><h2>${esc(f.title)}</h2></div>
+      <button type="button" class="btn btn-sm" data-dl>${ic('download')}Download</button><button type="button" class="icon-btn" data-close aria-label="Close">${ic('x')}</button></div>
+      <iframe src="${f.url}#view=FitH" title="${esc(f.title)}"></iframe>`;
+    document.body.appendChild(d);
+    d.addEventListener('close', () => d.remove());
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+    d.querySelector('[data-close]').addEventListener('click', () => d.close());
+    d.querySelector('[data-dl]').addEventListener('click', () => downloadDoc(f));
+    d.showModal();
+  }
+  const readFileB64 = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = () => rej(new Error('Could not read ' + file.name)); r.readAsDataURL(file); });
+  const pdfPages = (b64) => { try { const t = atob(b64); const m = t.match(/\/Type\s*\/Page[^s]/g); return m ? m.length : 0; } catch (e) { return 0; } };
+  const titleFromName = (n) => String(n).replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  function docDialog(id) {
+    const doc = id ? DB.docs.find((x) => x.id === id) : null;
+    const groups = Array.from(new Set(DOC_GROUPS.concat(DB.docs.map((x) => x.group))));
+    modal({
+      title: doc ? 'Edit document' : 'Upload documents', submit: doc ? 'Save' : 'Upload', wide: false,
+      danger: doc ? { label: 'Remove', confirm: `Remove "${doc.title}" from the portal?\n\nThe file moves to the Drive trash of the portal account, where it can be restored for 30 days.`, run: () => save('deleteDoc', { id: doc.id }, () => { DB.docs = DB.docs.filter((x) => x.id !== doc.id); delete docCache[doc.id]; }, 'Document removed') } : null,
+      body: `${doc ? `<label class="field"><span>Title</span><input class="input" name="title" required value="${esc(doc.title)}"></label>` : `<label class="field"><span>Files</span><input class="input" type="file" name="files" id="doc-files" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.txt" required><small>PDFs open inside the portal; other files can be downloaded. Up to 15 MB each.</small></label>
+          <label class="field" id="doc-title-wrap"><span>Title</span><input class="input" name="title" placeholder="Taken from the file name"><small>For one file. With several files, each uses its file name; you can rename them after.</small></label>`}
+        <div class="row2"><label class="field"><span>Group</span><input class="input" name="group" list="doc-groups" value="${esc(doc ? doc.group : 'Skill guidebooks')}" required><datalist id="doc-groups">${groups.map((g) => `<option value="${esc(g)}">`).join('')}</datalist></label>
+          <label class="field"><span>Who can see it</span><select class="select" name="audience"><option value="all" ${!doc || doc.audience !== 'managers' ? 'selected' : ''}>Everyone (managers & VAs)</option><option value="managers" ${doc && doc.audience === 'managers' ? 'selected' : ''}>Managers & AEs only</option></select></label></div>
+        ${doc ? `<label class="field"><span>Replace file <span class="muted" style="font-weight:400">(optional)</span></span><input class="input" type="file" name="replace" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.txt"><small>Upload a newer version. The old file goes to the Drive trash.</small></label>` : ''}`,
+      onSubmit(f, form) {
+        const group = String(f.get('group') || '').trim() || 'Other', audience = f.get('audience') === 'managers' ? 'managers' : 'all';
+        if (doc) {
+          const title = String(f.get('title') || '').trim(), rep = form.elements.replace.files[0];
+          if (!rep) { const next = Object.assign({}, doc, { title, group, audience }); save('saveDoc', { doc: next }, () => { DB.docs = DB.docs.map((x) => (x.id === doc.id ? next : x)); }, 'Saved'); return; }
+          uploadFiles([rep], { title, group, audience, replaceId: doc.id });
+          return;
+        }
+        const files = Array.from(form.elements.files.files || []);
+        if (!files.length) { toast('Choose a file', true); return false; }
+        uploadFiles(files, { title: files.length === 1 ? String(f.get('title') || '').trim() : '', group, audience });
+      },
+    });
+  }
+  async function uploadFiles(files, opt) {
+    let done = 0;
+    for (const file of files) {
+      if (file.size > 15 * 1024 * 1024) { toast(file.name + ' is over 15 MB', true); continue; }
+      toast(`Uploading ${file.name}…`, false, 'upload');
+      try {
+        const data = await readFileB64(file);
+        const doc = { title: opt.title || titleFromName(file.name), group: opt.group, audience: opt.audience, name: file.name, type: file.type || 'application/octet-stream', data, pages: /pdf/i.test(file.type || file.name) ? pdfPages(data) : 0, replaceId: opt.replaceId || '' };
+        inflight++;
+        try { await api('uploadDoc', { doc }); } finally { inflight--; }
+        if (opt.replaceId) delete docCache[opt.replaceId];
+        done++;
+      } catch (e) { toast('Could not upload ' + file.name + ': ' + e.message, true); }
+    }
+    if (done) { toast(`${done} document${done === 1 ? '' : 's'} ${opt.replaceId ? 'replaced' : 'uploaded'}`); await load().catch(() => {}); render(); }
+  }
+
   /* ------------------------------------------------------------------ VA view ("My Portal")
      What a signed-in VA sees. The server only sends their own profile and the trainings they are in:
      no ratings, targets, notes, other VAs or manager data ever reach this page. */
@@ -913,26 +1026,34 @@
       <div style="text-align:right"><span class="pill ${STATUS_TONE[t.status] || 'tone-info'}">${esc(t.status)}</span><div class="meta" style="${t.status !== 'Completed' && t.due && daysSince(t.due) > 0 ? 'color:var(--bad);font-weight:600' : ''}">${t.status === 'Completed' ? 'Done' : t.due ? (daysSince(t.due) > 0 ? 'Overdue · ' : 'Due ') + fmtShort(t.due) : ''}</div></div></li>`;
     const section = (title, sub, list, empty) => `<section class="card"><div class="card-head"><h2>${title}</h2><span class="sub">${sub}</span></div>${list.length ? `<ul class="list">${list.map(item).join('')}</ul>` : `<div class="empty">${empty}</div>`}</section>`;
     const first = String(p.name || ME).split(' ')[0];
+    const onGuides = route().page === 'guides';
+    const vnav = (m) => [['#/', 'home', 'My portal', !onGuides], ['#/guides', 'book', 'Guidebooks', onGuides]].map(([h, i, l, cur]) => `<a href="${h}" ${cur ? 'aria-current="page"' : ''}>${ic(i)}<span>${l}</span></a>`).join('');
+    const guidesPage = `<div class="page-head"><div><h1>Guidebooks</h1><p>Read the training guidebooks here or download them to keep.</p></div></div>
+          <div class="toolbar"><label class="search-field">${ic('search')}<span class="sr-only">Search guidebooks</span><input class="input" id="doc-q" type="search" placeholder="Search guidebooks" value="${esc(ui.docQuery || '')}"></label></div>
+          <div id="docs-list">${guidesHtml(d.docs || [], false)}</div>`;
     $('#app').innerHTML = `<div class="shell">
       <aside class="sidebar">
         <a class="brand" href="#/">${MARK}<div><div class="brand-name">${esc(d.settings.teamName)}</div><div class="brand-sub">Training Portal</div></div></a>
-        <nav class="nav" aria-label="Main"><a href="#/" aria-current="page">${ic('home')}<span>My portal</span></a></nav>
+        <nav class="nav" aria-label="Main">${vnav()}</nav>
         <div class="sidebar-foot"><div class="me">${avatar({ id: 'm', name: ME })}<div style="min-width:0"><div class="me-name">${esc(ME)}</div><div class="me-role" title="${esc(MEINFO ? MEINFO.email : '')}">${esc(p.role || 'VA')}</div></div>
           <button type="button" data-act="sign-out" title="Sign out" aria-label="Sign out">${ic('logout')}</button></div></div>
       </aside>
       <div class="main">
         <header class="topbar"><a class="mobile-brand" href="#/">${MARK}<b>${esc(d.settings.teamName)}</b></a><span class="right"><button type="button" class="btn btn-sm btn-ghost va-signout" data-act="sign-out">${ic('logout')}Sign out</button></span></header>
-        <main class="page" id="page">
+        <main class="page" id="page">${onGuides ? guidesPage : `
           <section class="hero"><div><h1>${greeting()}, ${esc(first)}</h1><p>${fmt(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(p.role || 'VA')}${p.account ? ' · ' + esc(p.account) : ''}</p></div></section>
           <div class="grid grid-2e" style="align-items:start;margin-bottom:20px">
             ${section('My training', 'Skills you are learning', open(mine), 'No training assigned right now.')}
             ${teach.length ? section('Training others', 'VAs you are helping', open(teach), 'Nobody to train right now.') : `<section class="card"><div class="card-head"><h2>Quizzes</h2><span class="sub">Coming soon</span></div><div class="card-body muted">Practice quizzes and skill assessments will appear here, one for each skill guidebook.</div></section>`}
           </div>
           ${teach.length ? `<section class="card" style="margin-bottom:20px"><div class="card-head"><h2>Quizzes</h2><span class="sub">Coming soon</span></div><div class="card-body muted">Practice quizzes and skill assessments will appear here, one for each skill guidebook.</div></section>` : ''}
-          ${done(mine).length + done(teach).length ? section('Completed', 'Finished trainings', done(mine).concat(done(teach)), '') : ''}
+          <section class="card" style="margin-bottom:20px"><div class="card-head"><h2>Guidebooks</h2><span class="sub">${(d.docs || []).length} to read or download</span><a class="btn btn-ghost btn-sm right" href="#/guides">Open ${ic('chevron')}</a></div></section>
+          ${done(mine).length + done(teach).length ? section('Completed', 'Finished trainings', done(mine).concat(done(teach)), '') : ''}`}
         </main>
-      </div></div>`;
-    document.title = 'My portal · ' + d.settings.teamName + ' Training Portal';
+      </div>
+      <nav class="tabbar va-tabbar" aria-label="Main">${vnav()}</nav></div>`;
+    document.title = (onGuides ? 'Guidebooks' : 'My portal') + ' · ' + d.settings.teamName + ' Training Portal';
+    const dq = $('#doc-q'); if (dq) dq.addEventListener('input', (e) => { ui.docQuery = e.target.value; $('#docs-list').innerHTML = guidesHtml(d.docs || [], false); });
   }
 
   /* ------------------------------------------------------------------ Users
@@ -1299,7 +1420,7 @@
     d.innerHTML = `<div class="palette-input">${ic('search')}<input type="text" placeholder="Search VAs, pages or actions…" aria-label="Search" autocomplete="off"></div><ul class="palette-list" role="listbox"></ul>`;
     document.body.appendChild(d);
     const input = $('input', d), list = $('ul', d);
-    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Users', '#/users'], ['Settings', '#/settings']];
+    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Guidebooks', '#/guides'], ['Users', '#/users'], ['Settings', '#/settings']];
     const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()], ['Post a team note', () => newTeamNote()]];
     let items = [], sel = 0;
     const draw = () => {
@@ -1383,6 +1504,10 @@
       case 'del-rating': return deleteSkillRating(id, el.dataset.skill);
       case 'del-session': return deleteSession(id, el.dataset.day, el.dataset.manager);
       case 'tnote-new': return newTeamNote();
+      case 'doc-read': return withDoc(id, el, readDoc);
+      case 'doc-download': return withDoc(id, el, downloadDoc);
+      case 'doc-upload': return docDialog();
+      case 'doc-edit': return docDialog(id);
       case 'tnote-edit': return teamNoteDialog(id);
       case 'tnote-pin': { const n = DB.teamNotes.find((x) => x.id === id); if (!n) return; const rec = Object.assign({}, n, { pinned: !n.pinned }); return save('saveTeamNote', { teamNote: rec }, () => { DB.teamNotes = DB.teamNotes.map((x) => (x.id === id ? rec : x)); }, rec.pinned ? 'Pinned for everyone' : 'Unpinned'); }
       case 'tnote-del': if (confirm('Delete this team note for all managers?')) save('deleteTeamNote', { id }, () => { DB.teamNotes = DB.teamNotes.filter((n) => n.id !== id); }, 'Note deleted'); return;

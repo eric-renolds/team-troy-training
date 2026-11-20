@@ -33,6 +33,7 @@ const TABS = {
   settings: { name: 'Portal Settings', headers: ['Key', 'Value'] },
   managers: { name: 'Managers', headers: ['Name', 'Email', 'Added', 'Added by'] },
   teamNotes: { name: 'Team Notes', headers: ['ID', 'Date', 'Manager', 'Note', 'Pinned', 'Edited'] },
+  docs: { name: 'Documents', headers: ['ID', 'Title', 'Group', 'Audience', 'File ID', 'File name', 'Type', 'Size', 'Pages', 'Key', 'Order', 'Uploaded', 'Uploaded by'] },
 };
 
 const STANDARD_SKILLS = [
@@ -92,6 +93,7 @@ function setup() {
   if (!st.reassessDays) setSetting_('reassessDays', '45');
   if (!st.managers) setSetting_('managers', '');
   UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo', { muteHttpExceptions: true }); // asks for the sign-in check permission
+  docsFolder_(); // asks for Drive permission and creates the private documents folder
   safeAlert_('Team Troy portal is set up. Now deploy it as a web app (see the notes at the top of Code.gs).');
 }
 
@@ -129,10 +131,12 @@ function doPost(e) {
       // VAs can only read their own page. Nothing about other people is ever sent to them.
       if (req.action === 'getAll') return json_({ ok: true, data: getMine_(me), rev: rev_(), me: me });
       if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
+      if (req.action === 'getDoc') return json_({ ok: true, doc: getDoc_(req.id, me) });
       return json_({ ok: false, error: "You don't have permission to do that.", code: 'forbidden' });
     }
     if (req.action === 'getAll') { ensureScale10_(); migrateManagers_(); return json_({ ok: true, data: getAll_(), rev: rev_(), me: me }); }
     if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
+    if (req.action === 'getDoc') return json_({ ok: true, doc: getDoc_(req.id, me) });
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
@@ -151,6 +155,9 @@ function doPost(e) {
         case 'removeManager': removeManager_(req.email, me, req.name); break;
         case 'saveTeamNote': upsert_('teamNotes', 'ID', teamNoteRow_(req.teamNote, me.name)); break;
         case 'deleteTeamNote': deleteWhere_('teamNotes', 'ID', req.id); break;
+        case 'uploadDoc': uploadDoc_(req.doc || {}, me); break;
+        case 'saveDoc': saveDoc_(req.doc || {}); break;
+        case 'deleteDoc': deleteDoc_(req.id); break;
         default: return json_({ ok: false, error: 'Unknown action' });
       }
       bumpRev_(me.name);
@@ -277,6 +284,7 @@ function getAll_() {
     training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 8, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
     notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
     teamNotes: read_('teamNotes').map((n) => ({ id: n.ID, ts: n.Date, manager: n.Manager, text: n.Note, pinned: String(n.Pinned || '').toUpperCase() === 'Y', edited: n.Edited })),
+    docs: listDocs_('manager'),
     managerList: readManagers_().map((m) => ({ name: m.name, email: m.email, owner: !!m.email && m.email === ownerEmail_() })),
     settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: readManagers_().map((m) => m.name) }; })(),
   };
@@ -299,6 +307,7 @@ function getMine_(me) {
       const asTrainee = t['Trainee ID'] === me.personId, other = asTrainee ? t['Trainer ID'] : t['Trainee ID'];
       return { id: t.ID, as: asTrainee ? 'trainee' : 'trainer', with: nameOf(other), withRole: roleOf(other), skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), start: t.Start, due: t.Due, status: t.Status || 'Planned' };
     }),
+    docs: listDocs_('va'),
     settings: { teamName: readSettings_().teamName || 'Team Troy' },
   };
 }
@@ -421,6 +430,72 @@ function ensureScale10_() {
     setSetting_('scale', '10');
     bumpRev_('');
   } finally { lock.releaseLock(); }
+}
+
+/* ============================== guidebooks & documents ============================== */
+// Files live in a private Drive folder owned by this script's account and are never shared.
+// Signed-in people get them only through getDoc, which checks who is asking.
+// Audience: 'all' = managers and VAs, 'managers' = managers (and AEs) only.
+
+const MAX_DOC_BYTES = 15 * 1024 * 1024;
+
+function docsFolder_() {
+  const id = readSettings_().docsFolderId;
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
+  const folder = DriveApp.createFolder('Team Troy Guidebooks (portal, private)');
+  folder.setDescription('Files for the Team Troy Training Portal. Not shared: the portal serves them to signed-in managers and VAs only. Manage them from the portal\'s Guidebooks page.');
+  setSetting_('docsFolderId', folder.getId());
+  return folder;
+}
+
+function listDocs_(role) {
+  return read_('docs')
+    .filter((d) => role === 'manager' || String(d.Audience || 'all') === 'all')
+    .map((d) => ({ id: d.ID, title: d.Title, group: d.Group || 'Other', audience: d.Audience || 'all', name: d['File name'], type: d.Type, size: Number(d.Size) || 0, pages: Number(d.Pages) || 0, key: d.Key || '', order: Number(d.Order) || 0, uploaded: d.Uploaded }))
+    .sort((a, b) => a.order - b.order || String(a.title).localeCompare(String(b.title)));
+}
+
+function getDoc_(id, me) {
+  const d = read_('docs').find((r) => r.ID === id);
+  if (!d) throw new Error('That document no longer exists.');
+  if (me.role !== 'manager' && String(d.Audience || 'all') !== 'all') throw new Error("You don't have permission to open that document.");
+  const blob = DriveApp.getFileById(d['File ID']).getBlob();
+  return { id: d.ID, title: d.Title, name: d['File name'] || blob.getName(), type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+
+function uploadDoc_(d, me) {
+  const title = String(d.title || '').trim();
+  if (!title) throw new Error('Title is required');
+  if (!d.data) throw new Error('Choose a file to upload');
+  const bytes = Utilities.base64Decode(String(d.data));
+  if (bytes.length > MAX_DOC_BYTES) throw new Error('That file is too large (15 MB maximum)');
+  const name = String(d.name || title).replace(/[\\/:*?"<>|]+/g, '-').slice(0, 150);
+  const file = docsFolder_().createFile(Utilities.newBlob(bytes, String(d.type || 'application/pdf'), name));
+  const now = new Date().toISOString();
+  const existing = d.replaceId ? read_('docs').find((r) => r.ID === d.replaceId) : null;
+  if (existing) {
+    try { DriveApp.getFileById(existing['File ID']).setTrashed(true); } catch (e) {} // old version goes to Drive trash (recoverable)
+    upsert_('docs', 'ID', Object.assign({}, existing, { Title: title, Group: d.group || existing.Group, Audience: d.audience || existing.Audience, 'File ID': file.getId(), 'File name': name, Type: file.getMimeType(), Size: bytes.length, Pages: Number(d.pages) || '', Uploaded: now, 'Uploaded by': me.name }));
+    return;
+  }
+  const order = read_('docs').reduce((m, r) => Math.max(m, Number(r.Order) || 0), 0) + 1;
+  upsert_('docs', 'ID', { ID: d.id || id_('d'), Title: title, Group: String(d.group || 'Other').trim(), Audience: d.audience === 'managers' ? 'managers' : 'all', 'File ID': file.getId(), 'File name': name, Type: file.getMimeType(), Size: bytes.length, Pages: Number(d.pages) || '', Key: String(d.key || ''), Order: Number(d.order) || order, Uploaded: now, 'Uploaded by': me.name });
+}
+
+function saveDoc_(d) {
+  const row = read_('docs').find((r) => r.ID === d.id);
+  if (!row) throw new Error('That document no longer exists.');
+  upsert_('docs', 'ID', Object.assign({}, row, {
+    Title: String(d.title || row.Title).trim(), Group: String(d.group || row.Group).trim(), Audience: d.audience === 'managers' ? 'managers' : 'all',
+    Key: d.key != null ? String(d.key) : row.Key, Order: d.order != null ? Number(d.order) : row.Order,
+  }));
+}
+
+function deleteDoc_(id) {
+  const row = read_('docs').find((r) => r.ID === id);
+  if (!row) return;
+  try { DriveApp.getFileById(row['File ID']).setTrashed(true); } catch (e) {} // Drive trash keeps it for 30 days
+  deleteWhere_('docs', 'ID', id);
 }
 
 /* ============================== live sync ============================== */
