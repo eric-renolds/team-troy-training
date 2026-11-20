@@ -996,21 +996,102 @@
       },
     });
   }
+  // ---- uploads: duplicate check first, then a progress panel that stays on screen until all files are done
+  let uploading = false;
+  const normName = (t) => String(t || '').toLowerCase().replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '');
+  function findDuplicate(file, title) {
+    const n = normName(file.name), t = normName(title);
+    return DB.docs.find((d) => (d.size && d.size === file.size) || (t && normName(d.title) === t) || normName(d.name) === n) || null;
+  }
+  function askDuplicates(list) {
+    return new Promise((resolve) => {
+      const d = document.createElement('dialog');
+      d.className = 'modal';
+      d.innerHTML = `<div class="modal-form"><div class="modal-head"><div><h2>${list.length === 1 ? 'This file is' : list.length + ' files are'} already uploaded</h2><div class="sub">Matched by file size or title.</div></div></div>
+        <div class="modal-body"><ul class="dup-list">${list.map((x) => `<li><b>${esc(x.file.name)}</b><span>${x.match ? 'matches “' + esc(x.match.title) + '”' : 'appears twice in your selection'}</span></li>`).join('')}</ul></div>
+        <div class="modal-foot"><button type="button" class="btn" data-v="cancel">Cancel upload</button><button type="button" class="btn" data-v="keep">Upload anyway</button>${list.some((x) => x.match) ? '<button type="button" class="btn" data-v="replace">Replace existing</button>' : ''}<button type="button" class="btn btn-primary" data-v="skip">Skip duplicates</button></div></div>`;
+      document.body.appendChild(d);
+      let v = 'cancel';
+      d.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => { v = b.dataset.v; d.close(); }));
+      d.addEventListener('close', () => { d.remove(); resolve(v); });
+      d.showModal();
+    });
+  }
+  function progressPanel(total) {
+    let el = $('#upload-panel'); if (el) el.remove();
+    el = document.createElement('div');
+    el.id = 'upload-panel'; el.className = 'upload-panel'; el.setAttribute('role', 'status');
+    el.innerHTML = `<div class="up-head"><b>Uploading 0 of ${total}</b><span class="up-pct">0%</span></div><div class="up-bar"><i></i></div><div class="up-now muted"></div><ul class="up-list"></ul>`;
+    document.body.appendChild(el);
+    return {
+      start(i, name) { el.querySelector('b').textContent = `Uploading ${i + 1} of ${total}`; el.querySelector('.up-now').textContent = name; },
+      step(i, name, ok, msg) {
+        const pct = Math.round(((i + 1) / total) * 100);
+        el.querySelector('.up-bar i').style.width = pct + '%'; el.querySelector('.up-pct').textContent = pct + '%';
+        el.querySelector('.up-list').insertAdjacentHTML('afterbegin', `<li class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(name)}${msg ? ` <span>${esc(msg)}</span>` : ''}</li>`);
+      },
+      finish(done, failed, skipped) {
+        el.classList.add('done');
+        el.querySelector('b').textContent = failed ? `${done} uploaded, ${failed} failed` : `${done} uploaded`;
+        el.querySelector('.up-now').textContent = skipped ? `${skipped} duplicate${skipped === 1 ? '' : 's'} skipped` : 'All done';
+        el.querySelector('.up-head').insertAdjacentHTML('beforeend', '<button type="button" class="icon-btn" aria-label="Close">' + ic('x') + '</button>');
+        el.querySelector('.up-head .icon-btn').addEventListener('click', () => el.remove());
+        if (!failed) setTimeout(() => el.remove(), 8000);
+      },
+    };
+  }
+  const leaveGuard = (e) => { e.preventDefault(); e.returnValue = ''; };
   async function uploadFiles(files, opt) {
-    let done = 0;
-    for (const file of files) {
-      if (file.size > 15 * 1024 * 1024) { toast(file.name + ' is over 15 MB', true); continue; }
-      toast(`Uploading ${file.name}…`, false, 'upload');
+    if (uploading) { toast('An upload is already running. Wait for it to finish.', true); return; }
+    let skipped = 0;
+    let jobs = files.map((file) => ({ file, title: opt.title || titleFromName(file.name), replaceId: opt.replaceId || '' }));
+    const tooBig = jobs.filter((j) => j.file.size > 15 * 1024 * 1024);
+    tooBig.forEach((j) => toast(j.file.name + ' is over 15 MB', true));
+    jobs = jobs.filter((j) => j.file.size <= 15 * 1024 * 1024);
+    if (!opt.replaceId) {
+      const seen = [], dups = [];
+      jobs.forEach((j) => {
+        const match = findDuplicate(j.file, j.title);
+        const twin = seen.find((x) => x.file.size === j.file.size && normName(x.file.name) === normName(j.file.name));
+        if (match || twin) dups.push({ file: j.file, match, job: j });
+        seen.push(j);
+      });
+      if (dups.length) {
+        const v = await askDuplicates(dups);
+        if (v === 'cancel') return;
+        if (v === 'skip') {
+          // drop files already in the portal, and keep only the first copy of a file picked twice
+          const keep = [];
+          jobs.forEach((j) => {
+            if (dups.some((x) => x.job === j && x.match)) return;
+            if (keep.some((k) => k.file.size === j.file.size && normName(k.file.name) === normName(j.file.name))) return;
+            keep.push(j);
+          });
+          skipped = jobs.length - keep.length; jobs = keep;
+        }
+        if (v === 'replace') dups.forEach((x) => { if (x.match) { x.job.replaceId = x.match.id; x.job.title = x.match.title; } });
+      }
+    }
+    if (!jobs.length) { toast('Nothing new to upload'); return; }
+    uploading = true; window.addEventListener('beforeunload', leaveGuard);
+    const panel = progressPanel(jobs.length);
+    let done = 0, failed = 0;
+    for (let i = 0; i < jobs.length; i++) {
+      const { file, title, replaceId } = jobs[i];
+      panel.start(i, file.name);
       try {
         const data = await readFileB64(file);
-        const doc = { title: opt.title || titleFromName(file.name), group: opt.group, audience: opt.audience, name: file.name, type: file.type || 'application/octet-stream', data, pages: /pdf/i.test(file.type || file.name) ? pdfPages(data) : 0, replaceId: opt.replaceId || '' };
+        const match = replaceId ? DB.docs.find((d) => d.id === replaceId) : null;
+        const doc = { title, group: match ? match.group : opt.group, audience: match ? match.audience : opt.audience, name: file.name, type: file.type || 'application/octet-stream', data, pages: /pdf/i.test(file.type || file.name) ? pdfPages(data) : 0, replaceId };
         inflight++;
         try { await api('uploadDoc', { doc }); } finally { inflight--; }
-        if (opt.replaceId) delete docCache[opt.replaceId];
-        done++;
-      } catch (e) { toast('Could not upload ' + file.name + ': ' + e.message, true); }
+        if (replaceId) delete docCache[replaceId];
+        done++; panel.step(i, title, true, replaceId ? 'replaced' : '');
+      } catch (e) { failed++; panel.step(i, file.name, false, e.message); }
     }
-    if (done) { toast(`${done} document${done === 1 ? '' : 's'} ${opt.replaceId ? 'replaced' : 'uploaded'}`); await load().catch(() => {}); render(); }
+    uploading = false; window.removeEventListener('beforeunload', leaveGuard);
+    panel.finish(done, failed, skipped);
+    if (done) { await load().catch(() => {}); render(); }
   }
 
   /* ------------------------------------------------------------------ VA view ("My Portal")
