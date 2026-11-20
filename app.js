@@ -503,56 +503,102 @@
   /* ------------------------------------------------------------------ Home */
   function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; }
 
+  /* ------------------------------------------------------------------ Home
+     Left column: the work to do (attention, skill gaps, training due) as dropdowns that remember
+     whether they are open. Right column: the team feed (notes, trainers, activity). */
+  const ATTN_KINDS = [
+    { k: 'unrated', label: 'Not rated', tone: 'tone-warn' },
+    { k: 'stale', label: 'Re-rate due', tone: 'tone-info' },
+    { k: 'overdue', label: 'Training overdue', tone: 'tone-bad' },
+    { k: 'gap', label: 'Uncovered gaps', tone: 'tone-accent' },
+  ];
+  const homeOpen = (key, dflt) => { const v = store.get('tt-home-' + key); return v == null ? dflt : v === '1'; };
+  function homeDrop(key, { icon, title, count, tone, summary, body, open, extra }) {
+    return `<details class="card home-drop" data-key="${key}" ${homeOpen(key, open) ? 'open' : ''}>
+      <summary><span class="dot-icon ${tone}">${ic(icon)}</span>
+        <div class="hd-main"><div class="hd-title"><h2>${title}</h2>${count != null ? `<span class="hd-count ${tone}">${count}</span>` : ''}</div><div class="hd-sum">${summary}</div></div>
+        ${extra || ''}<span class="hd-chev">${chev}</span></summary>
+      <div class="hd-body">${body}</div></details>`;
+  }
+  function attnList(c) {
+    const f = ui.attnFilter || 'all';
+    const list = c.attention.filter((a) => f === 'all' || a.kind === f);
+    if (!list.length) return '<div class="empty" style="padding:24px">Nothing here.</div>';
+    return `<ul class="list attn-list">${list.map((a) => `<li>
+      <span class="dot-icon ${a.tone}">${ic(a.icon)}</span>
+      <div class="grow"><div class="title">${esc(a.title)}</div><div class="meta">${esc(a.meta)}</div></div>
+      <button class="btn btn-sm" data-act="${a.action}" data-id="${esc(a.action === 'open-training' ? a.tid : a.pid)}">${a.label}</button></li>`).join('')}</ul>`;
+  }
+  function gapRows(c) {
+    const cat = ui.gapCat || 'all';
+    const all = activeSkills().filter((s) => cat === 'all' || s.category === cat).map((s) => ({ s, v: c.skillAvg[s.name], n: activePeople().filter((p) => c.latest[p.id] && c.latest[p.id][s.name]).length })).filter((x) => x.v != null).sort((a, b) => a.v - b.v);
+    if (!all.length) return '<div class="empty" style="padding:24px"><b>No ratings yet</b>Rate a few VAs to see where the team is weakest.</div>';
+    const shown = ui.gapAll ? all : all.slice(0, 8);
+    return `<div class="gap-rows">${shown.map((g) => `<div class="gap-row"><div><div class="skill-name">${esc(g.s.name)}</div><div class="muted" style="font-size:12px">${esc(g.s.category)} · ${g.n} VA${g.n === 1 ? '' : 's'} rated</div></div>${meter(g.v)}</div>`).join('')}</div>
+      ${all.length > 8 ? `<div class="hd-foot"><button class="btn btn-ghost btn-sm" data-act="gap-all">${ui.gapAll ? 'Show fewer' : `Show all ${all.length} skills`}</button></div>` : ''}`;
+  }
   function pageHome() {
     const c = derive();
     const ap = activePeople();
-    const due = c.attention.filter((a) => a.kind === 'unrated' || a.kind === 'stale').length;
-    const overdue = DB.training.filter(isOverdue).length;
+    const overdue = DB.training.filter(isOverdue);
+    const ratedRecently = ap.filter((p) => daysSince(c.last[p.id]) <= DB.settings.reassessDays).length;
     const trainers = ap.filter((p) => c.load[p.id]).sort((a, b) => c.load[b.id] - c.load[a.id]);
-    const gaps = activeSkills().map((s) => ({ s, v: c.skillAvg[s.name] })).filter((x) => x.v != null).sort((a, b) => a.v - b.v).slice(0, 6);
-    const kpi = (icon, label, value, foot) => `<div class="card kpi"><div class="kpi-label">${ic(icon)}${label}</div><div class="kpi-value">${value}</div><div class="kpi-foot">${foot}</div></div>`;
+    const counts = {}; c.attention.forEach((a) => (counts[a.kind] = (counts[a.kind] || 0) + 1));
+    const rated = activeSkills().map((s) => ({ s, v: c.skillAvg[s.name] })).filter((x) => x.v != null).sort((a, b) => a.v - b.v);
+    const weak = rated.filter((x) => x.v <= WEAK).length;
+    const soon = DB.training.filter((t) => t.status !== 'Completed' && t.due && daysSince(t.due) >= -14).sort((a, b) => (a.due < b.due ? -1 : 1));
     const firstName = ME.split(' ')[0];
+    const kpi = (href, icon, label, value, foot, extra) => `<a class="card kpi kpi-link" href="${href}"><div class="kpi-label">${ic(icon)}${label}<span class="kpi-go">${ic('chevron')}</span></div><div class="kpi-value">${value}</div>${extra || ''}<div class="kpi-foot">${foot}</div></a>`;
+    const pct = ap.length ? Math.round((ratedRecently / ap.length) * 100) : 0;
+
+    const attnBody = c.attention.length ? `
+      <div class="hd-tabs" role="tablist">${[{ k: 'all', label: 'All' }].concat(ATTN_KINDS).filter((x) => x.k === 'all' || counts[x.k]).map((x) => `<button role="tab" aria-selected="${(ui.attnFilter || 'all') === x.k}" data-act="attn-filter" data-id="${x.k}">${x.label} <span class="n">${x.k === 'all' ? c.attention.length : counts[x.k]}</span></button>`).join('')}</div>
+      <div id="attn-list">${attnList(c)}</div>` : '<div class="empty" style="padding:24px"><b>All clear</b>Everyone is rated and training is on schedule.</div>';
+    const attnSummary = c.attention.length ? ATTN_KINDS.filter((x) => counts[x.k]).map((x) => `<span class="hd-chip ${x.tone}">${counts[x.k]} ${x.label.toLowerCase()}</span>`).join('') : '<span class="muted">All clear</span>';
+
+    const cats = categories().filter((k) => rated.some((x) => x.s.category === k));
+    const gapBody = `${rated.length ? `<div class="hd-tools"><label class="sr-only" for="gap-cat">Category</label><select class="select" id="gap-cat"><option value="all">All categories</option>${cats.map((k) => `<option ${ui.gapCat === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select><a class="btn btn-ghost btn-sm" href="#/matrix">Open matrix ${ic('chevron')}</a></div>` : ''}
+      <div id="gap-rows">${gapRows(c)}</div>`;
+    const gapSummary = rated.length ? `Lowest: <b>${esc(rated[0].s.name)}</b> ${badge(rated[0].v, true)} · ${weak} skill${weak === 1 ? '' : 's'} at ${WEAK} or below` : '<span class="muted">No ratings yet</span>';
+
+    const soonBody = soon.length ? `<ul class="list">${soon.map((t) => { const a = person(t.traineeId), b = person(t.trainerId); return `<li style="cursor:pointer" data-act="open-training" data-id="${esc(t.id)}">${avatar(a, 'sm')}<div class="grow"><div class="title">${esc(a ? a.name : '—')} <span class="muted" style="font-weight:400">with ${esc(b ? b.name : '—')}</span></div><div class="meta">${esc(t.skills.join(', '))}</div></div><span class="pill plain ${isOverdue(t) ? 'tone-bad' : 'tone-info'}">${isOverdue(t) ? 'Overdue · ' : 'Due '}${fmtShort(t.due)}</span></li>`; }).join('')}</ul>` : '<div class="empty" style="padding:24px">Nothing due in the next two weeks.</div>';
+
     const body = `
-      <section class="hero">
-        <div><h1>${greeting()}, ${esc(firstName)}</h1><p>${fmt(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} · Here's how ${esc(DB.settings.teamName)} is doing.</p></div>
+      <section class="hero hero-compact">
+        <div><h1>${greeting()}, ${esc(firstName)}</h1><p>${fmt(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(DB.settings.teamName)}</p></div>
         <div class="actions"><button class="btn" data-act="new-training">${ic('training')}Assign trainer</button><button class="btn btn-accent" data-act="rate">${ic('star')}Rate a VA</button></div>
       </section>
       <div class="grid grid-4" style="margin-bottom:20px">
-        ${kpi('team', 'Active VAs', ap.length, `${ap.filter((p) => c.load[p.id]).length} currently training others`)}
-        ${kpi('chart', 'Team skill level', `${one(c.team)} <small>/ 10</small>`, `${deltaHtml(c.team != null && c.teamPrev != null ? c.team - c.teamPrev : null)} since previous ratings`)}
-        ${kpi('training', 'Active trainings', c.openT.length, overdue ? `<span style="color:var(--bad);font-weight:600">${overdue} overdue</span>` : 'All on schedule')}
-        ${kpi('clock', 'Due for rating', due, `Re-rate every ${DB.settings.reassessDays} days`)}
+        ${kpi('#/team', 'team', 'Active VAs', ap.length, `${trainers.length} training others`)}
+        ${kpi('#/matrix', 'chart', 'Team skill level', `${one(c.team)} <small>/ 10</small>`, `${deltaHtml(c.team != null && c.teamPrev != null ? c.team - c.teamPrev : null)} since previous ratings`)}
+        ${kpi('#/training', 'training', 'Active trainings', c.openT.length, overdue.length ? `<span style="color:var(--bad);font-weight:600">${overdue.length} overdue</span>` : 'All on schedule')}
+        ${kpi('#/team', 'clock', 'Rated this cycle', `${ratedRecently} <small>of ${ap.length}</small>`, `Re-rate every ${DB.settings.reassessDays} days`, `<div class="kpi-bar"><i style="width:${pct}%"></i></div>`)}
       </div>
-      ${homeNotesCard()}
-      <div class="grid grid-2" style="margin-bottom:20px">
-        <section class="card">
-          <div class="card-head"><h2>Needs your attention</h2><span class="sub">${c.attention.length} item${c.attention.length === 1 ? '' : 's'}</span></div>
-          ${c.attention.length ? `<ul class="list">${c.attention.slice(0, 7).map((a) => `<li>
-            <span class="dot-icon ${a.tone}">${ic(a.icon)}</span>
-            <div class="grow"><div class="title">${esc(a.title)}</div><div class="meta">${esc(a.meta)}</div></div>
-            <button class="btn btn-sm" data-act="${a.action}" data-id="${esc(a.action === 'open-training' ? a.tid : a.pid)}">${a.label}</button></li>`).join('')}</ul>
-            ${c.attention.length > 7 ? `<div class="card-body muted" style="border-top:1px solid var(--line)">+ ${c.attention.length - 7} more on the Team page</div>` : ''}`
-            : `<div class="empty"><b>All clear</b>Everyone is rated and training is on schedule.</div>`}
-        </section>
-        <section class="card">
-          <div class="card-head"><h2>Biggest skill gaps</h2><span class="sub">Team average</span><a class="btn btn-ghost btn-sm right" href="#/matrix">Open matrix ${ic('chevron')}</a></div>
-          <div class="card-body">${gaps.length ? gaps.map((g) => `<div class="skill-row" style="grid-template-columns:minmax(120px,1fr) 1.2fr"><div><div class="skill-name">${esc(g.s.name)}</div><div class="muted" style="font-size:12px">${esc(g.s.category)}</div></div>${meter(g.v)}</div>`).join('') : '<div class="empty">No ratings yet.</div>'}</div>
-        </section>
-      </div>
-      <div class="grid grid-2e">
-        <section class="card">
-          <div class="card-head"><h2>Trainers</h2><span class="sub">Who is training whom</span><a class="btn btn-ghost btn-sm right" href="#/training/trainers">All trainers ${ic('chevron')}</a></div>
-          ${trainers.length ? `<ul class="list">${trainers.slice(0, 5).map((p) => {
-            const ts = c.openT.filter((t) => t.trainerId === p.id).map((t) => person(t.traineeId)).filter(Boolean);
-            return `<li>${avatar(p)}<div class="grow"><a class="title" href="#/va/${esc(p.id)}" style="text-decoration:none">${esc(p.name)}</a> <span class="role-tag">${esc(p.role)}</span><div class="meta">${ts.map((x) => esc(x.name)).join(', ')}</div></div><div class="avatar-stack">${ts.slice(0, 4).map((x) => avatar(x, 'sm')).join('')}</div><span class="pill plain tone-accent">${ts.length} trainee${ts.length === 1 ? '' : 's'}</span></li>`;
-          }).join('')}</ul>` : '<div class="empty"><b>No trainers yet</b>Assign one from a VA\'s profile.</div>'}
-        </section>
-        <section class="card">
-          <div class="card-head"><h2>Recent activity</h2></div>
-          ${activityList(8)}
-        </section>
+      <div class="home-grid">
+        <div class="stack home-main">
+          ${homeDrop('attention', { icon: 'alert', title: 'Needs your attention', count: c.attention.length, tone: c.attention.length ? 'tone-warn' : 'tone-good', summary: attnSummary, body: attnBody, open: false })}
+          ${homeDrop('gaps', { icon: 'target', title: 'Biggest skill gaps', count: weak || null, tone: 'tone-accent', summary: gapSummary, body: gapBody, open: false })}
+          ${homeDrop('soon', { icon: 'clock', title: 'Training due soon', count: soon.length || null, tone: overdue.length ? 'tone-bad' : 'tone-info', summary: soon.length ? `${overdue.length ? `<span class="hd-chip tone-bad">${overdue.length} overdue</span>` : ''}<span class="muted">Next due: ${esc((person(soon[0].traineeId) || {}).name || '—')} · ${fmtShort(soon[0].due)}</span>` : '<span class="muted">Nothing due in the next two weeks</span>', body: soonBody, open: true })}
+        </div>
+        <div class="stack home-side">
+          ${homeNotesCard()}
+          <section class="card">
+            <div class="card-head"><h2>Trainers</h2><span class="sub">${trainers.length}</span><a class="btn btn-ghost btn-sm right" href="#/training/trainers">All ${ic('chevron')}</a></div>
+            ${trainers.length ? `<ul class="list">${trainers.slice(0, 5).map((p) => {
+              const ts = c.openT.filter((t) => t.trainerId === p.id).map((t) => person(t.traineeId)).filter(Boolean);
+              return `<li>${avatar(p, 'sm')}<div class="grow"><a class="title" href="#/va/${esc(p.id)}" style="text-decoration:none">${esc(p.name)}</a><div class="meta">${ts.map((x) => esc(x.name)).join(', ')}</div></div><span class="pill plain tone-accent">${ts.length}</span></li>`;
+            }).join('')}</ul>` : '<div class="empty" style="padding:22px">No trainers yet.</div>'}
+          </section>
+          <section class="card"><div class="card-head"><h2>Recent activity</h2></div>${activityList(6)}</section>
+        </div>
       </div>`;
-    return { title: 'Home', crumbs: '<b>Home</b>', body };
+    return {
+      title: 'Home', crumbs: '<b>Home</b>', body,
+      after() {
+        const gc = $('#gap-cat'); if (gc) gc.addEventListener('change', (e) => { ui.gapCat = e.target.value; ui.gapAll = false; $('#gap-rows').innerHTML = gapRows(derive()); });
+        $$('details.home-drop').forEach((d) => d.addEventListener('toggle', () => store.set('tt-home-' + d.dataset.key, d.open ? '1' : '0')));
+      },
+    };
   }
 
   function activity() {
@@ -884,7 +930,7 @@
   function homeNotesCard() {
     const unread = new Set(unreadNotes().map((n) => n.id));
     const list = sortedNotes().slice(0, 3);
-    return `<section class="card" style="margin-bottom:20px">
+    return `<section class="card">
       <div class="card-head"><h2>Team notes</h2><span class="sub">${unread.size ? `<span class="pill plain tone-good">${unread.size} new</span>` : 'Shared by all managers'}</span>
         <button class="btn btn-sm right" data-act="tnote-new">${ic('plus')}Post</button><a class="btn btn-ghost btn-sm" href="#/notes">All notes ${ic('chevron')}</a></div>
       ${list.length ? `<ul class="list tnotes">${list.map((n) => noteItem(n, { compact: true, isNew: unread.has(n.id) })).join('')}</ul>` : '<div class="empty">No team notes yet. Post one and every manager will see it.</div>'}
@@ -1585,6 +1631,8 @@
       case 'del-rating': return deleteSkillRating(id, el.dataset.skill);
       case 'del-session': return deleteSession(id, el.dataset.day, el.dataset.manager);
       case 'tnote-new': return newTeamNote();
+      case 'attn-filter': ui.attnFilter = id; $$('.hd-tabs [data-act=attn-filter]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.id === id))); $('#attn-list').innerHTML = attnList(derive()); return;
+      case 'gap-all': ui.gapAll = !ui.gapAll; $('#gap-rows').innerHTML = gapRows(derive()); return;
       case 'doc-read': return withDoc(id, el, readDoc);
       case 'doc-download': return withDoc(id, el, downloadDoc);
       case 'doc-upload': return docDialog();
