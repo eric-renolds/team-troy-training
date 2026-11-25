@@ -66,7 +66,7 @@
   const today0 = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
   const toDate = (v) => (v ? new Date(v) : null);
   const isoDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
-  const fmt = (v, opt) => (v ? new Date(v).toLocaleDateString(undefined, opt || { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
+  const fmt = (v, opt) => (v ? new Date(/^\d{4}-\d\d-\d\d$/.test(v) ? v + 'T00:00:00' : v).toLocaleDateString(undefined, opt || { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
   const fmtShort = (v) => fmt(v, { day: 'numeric', month: 'short' });
   const daysSince = (v) => (v ? Math.floor((today0() - new Date(isoDay(v) + 'T00:00:00')) / DAY) : Infinity);
   const ago = (v) => {
@@ -231,6 +231,8 @@
     if (typeof d.settings.managers === 'string') d.settings.managers = d.settings.managers.split(/\s*[,;\n]\s*/).filter(Boolean);
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
     d.docs = d.docs || [];
+    d.forms = d.forms || [];
+    d.responses = d.responses || [];
     d.managerList = (d.managerList || d.settings.managers.map((n) => ({ name: n, email: '', owner: false }))).map((m) => Object.assign({ email: '', owner: false }, m));
     return d;
   }
@@ -393,7 +395,7 @@
      or have a dialog open, so nothing you are in the middle of gets wiped. */
   const POLL_MS = 10000;
   let polling = false, pending = null;
-  const busy = () => { if ($('dialog[open]')) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
+  const busy = () => { if ($('dialog[open]') || ui.formDirty) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
   async function poll(force) {
     if (DEMO || !TOKEN || !ME || !DB || polling || inflight) return;
     if (document.hidden && !force) return;
@@ -443,9 +445,10 @@
     { id: 'matrix', href: '#/matrix', label: 'Skill matrix', icon: 'matrix', short: 'Matrix' },
     { id: 'notes', href: '#/notes', label: 'Team notes', icon: 'chat', short: 'Notes' },
     { id: 'guides', href: '#/guides', label: 'Guidebooks', icon: 'book', short: 'Guides' },
+    { id: 'forms', href: '#/forms', label: 'Forms', icon: 'note' },
   ];
   function route() {
-    const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').filter(Boolean);
+    const parts = (location.hash.replace(/^#\/?/, '').split('?')[0] || '').split('/').filter(Boolean);
     return { page: parts[0] || 'home', id: parts[1], sub: parts[2] };
   }
 
@@ -488,7 +491,7 @@
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
-    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, guides: pageGuides, users: pageUsers, settings: pageSettings };
+    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, guides: pageGuides, forms: pageForms, users: pageUsers, settings: pageSettings };
     const fn = pages[r.page] || pageHome;
     const out = fn(r);
     const y = window.scrollY;
@@ -1140,6 +1143,315 @@
     if (done) { await load().catch(() => {}); render(); }
   }
 
+  /* ------------------------------------------------------------------ Forms
+     Managers build a form, launch it to chosen VAs (they get an email), and see who answered.
+     VAs open it from the email or My portal, sign in, and their name is filled in automatically.
+     A "repeating" section (e.g. one per client) lets a VA add as many entries as they need. */
+  const US_STATES = ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'District of Columbia', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'];
+  const Q_TYPES = [['text', 'Short answer'], ['paragraph', 'Paragraph'], ['email', 'Email'], ['phone', 'Phone number'], ['number', 'Number'], ['date', 'Date'], ['select', 'Dropdown'], ['checkboxes', 'Checkboxes']];
+  const FORM_STATUS = { draft: ['Draft', 'tone-info'], open: ['Open', 'tone-good'], closed: ['Closed', 'tone-bad'] };
+  const fid = (p) => p + Math.random().toString(36).slice(2, 9);
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const CLIENT_TEMPLATE = () => ({
+    title: 'VA Client Information',
+    description: 'Please add every client you currently work with. Add one entry per client.',
+    schema: { sections: [{ id: fid('s'), title: 'Your clients', repeat: true, itemLabel: 'client', questions: [
+      { id: fid('q'), type: 'text', label: 'Client name', required: true },
+      { id: fid('q'), type: 'phone', label: 'Client phone number', required: true },
+      { id: fid('q'), type: 'email', label: 'Client email', required: true },
+      { id: fid('q'), type: 'select', label: 'State', required: true, options: US_STATES.slice() },
+      { id: fid('q'), type: 'paragraph', label: 'Business details', required: true, help: 'What the client does (team, brokerage, niche) and the work you handle for them.' },
+      { id: fid('q'), type: 'checkboxes', label: 'Tools you use for this client', required: false, options: ['Follow Up Boss', 'Lofty', 'KW Command', 'BoldTrail', 'Compass', 'Canva', 'Google Workspace', 'Microsoft Office', 'Dotloop', 'SkySlope', 'DocuSign', 'QuickBooks', 'Other'] },
+      { id: fid('q'), type: 'text', label: 'Other tools (if any)', required: false },
+    ] }] },
+  });
+
+  // ---- shared renderer: the fill-in form (VA) and the read-only preview / response view (manager)
+  function fieldHtml(q, val, key, ro) {
+    const req = q.required ? ' <span class="req" aria-hidden="true">*</span>' : '';
+    const help = q.help ? `<small>${esc(q.help)}</small>` : '';
+    const attrs = `data-q="${esc(q.id)}" ${key} ${ro ? 'disabled' : ''} ${q.required && !ro ? 'required' : ''}`;
+    let input;
+    if (q.type === 'paragraph') input = `<textarea class="textarea" ${attrs}>${esc(val || '')}</textarea>`;
+    else if (q.type === 'select') input = `<select class="select" ${attrs}><option value="">Choose…</option>${(q.options || []).map((o) => `<option ${val === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    else if (q.type === 'checkboxes') { const v = Array.isArray(val) ? val : []; input = `<div class="check-chips">${(q.options || []).map((o) => `<label><input type="checkbox" ${attrs} value="${esc(o)}" ${v.includes(o) ? 'checked' : ''}><span>${esc(o)}</span></label>`).join('')}</div>`; }
+    else { const t = { email: 'email', phone: 'tel', number: 'number', date: 'date' }[q.type] || 'text'; input = `<input class="input" type="${t}" ${attrs} value="${esc(val || '')}" ${q.type === 'phone' ? 'placeholder="(555) 123-4567"' : ''}>`; }
+    return `<div class="field fq" data-qwrap="${esc(q.id)}"><span>${esc(q.label || 'Untitled question')}${req}</span>${input}${help}</div>`;
+  }
+  function formBodyHtml(schema, answers, ro) {
+    answers = answers || {};
+    return (schema.sections || []).map((s) => {
+      if (!s.repeat) return `<section class="card fsec"><div class="card-head"><h2>${esc(s.title || 'Questions')}</h2></div><div class="card-body fgrid">${(s.questions || []).map((q) => fieldHtml(q, answers[q.id], `data-sec="${esc(s.id)}"`, ro)).join('')}</div></section>`;
+      const items = Array.isArray(answers[s.id]) && answers[s.id].length ? answers[s.id] : [{}];
+      const label = s.itemLabel || 'entry';
+      return `<section class="card fsec" data-rsec="${esc(s.id)}"><div class="card-head"><h2>${esc(s.title || 'Entries')}</h2><span class="sub">${items.length} ${esc(label)}${items.length === 1 ? '' : 's'}</span></div>
+        ${items.map((it, i) => `<div class="fitem"><div class="fitem-head"><b>${esc(label.charAt(0).toUpperCase() + label.slice(1))} ${i + 1}</b>${!ro && items.length > 1 ? `<button type="button" class="btn btn-ghost btn-sm btn-danger" data-act="f-del-item" data-sec="${esc(s.id)}" data-idx="${i}">${ic('x')}Remove</button>` : ''}</div>
+          <div class="fgrid">${(s.questions || []).map((q) => fieldHtml(q, it[q.id], `data-sec="${esc(s.id)}" data-idx="${i}"`, ro)).join('')}</div></div>`).join('')}
+        ${ro ? '' : `<div class="card-body"><button type="button" class="btn" data-act="f-add-item" data-sec="${esc(s.id)}">${ic('plus')}Add another ${esc(label)}</button></div>`}</section>`;
+    }).join('');
+  }
+  function collectAnswers(root, schema) {
+    const val = (q, sel) => {
+      if (q.type === 'checkboxes') return $$(`input[data-q="${q.id}"]${sel}:checked`, root).map((x) => x.value);
+      const el = $(`[data-q="${q.id}"]${sel}`, root); return el ? el.value : '';
+    };
+    const out = {};
+    (schema.sections || []).forEach((s) => {
+      if (!s.repeat) { (s.questions || []).forEach((q) => (out[q.id] = val(q, `[data-sec="${s.id}"]:not([data-idx])`))); return; }
+      const n = $$(`.fsec[data-rsec="${s.id}"] .fitem`, root).length;
+      out[s.id] = Array.from({ length: n }, (_, i) => { const o = {}; (s.questions || []).forEach((q) => (o[q.id] = val(q, `[data-sec="${s.id}"][data-idx="${i}"]`))); return o; });
+    });
+    return out;
+  }
+  function checkAnswers(schema, a) {
+    const bad = (q, v) => (q.required && (Array.isArray(v) ? !v.length : !String(v || '').trim())) ? 'Please answer: ' + q.label
+      : (q.type === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) ? 'Enter a valid email for: ' + q.label : '';
+    for (const s of schema.sections || []) {
+      if (s.repeat) { for (const it of a[s.id] || []) for (const q of s.questions || []) { const m = bad(q, it[q.id]); if (m) return m; } }
+      else for (const q of s.questions || []) { const m = bad(q, a[q.id]); if (m) return m; }
+    }
+    return '';
+  }
+  // Flattens responses into table rows: one row per VA, or one per repeating entry (e.g. per client).
+  function responseRows(form, responses) {
+    const secs = form.schema.sections || [], rep = secs.find((s) => s.repeat), flat = secs.filter((s) => !s.repeat).flatMap((s) => s.questions || []);
+    const cols = [{ key: 'person', label: 'VA' }].concat(flat.map((q) => ({ q }))).concat(rep ? (rep.questions || []).map((q) => ({ q, rep: true })) : []).concat([{ key: 'updated', label: 'Last updated' }]);
+    const show = (q, v) => (Array.isArray(v) ? v.join(', ') : String(v == null ? '' : v));
+    const rows = [];
+    responses.forEach((r) => {
+      const items = rep ? (r.answers[rep.id] || [{}]) : [null];
+      items.forEach((it) => rows.push(cols.map((c) => (c.key === 'person' ? r.person : c.key === 'updated' ? fmt(r.updated, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : show(c.q, c.rep ? (it || {})[c.q.id] : r.answers[c.q.id])))));
+    });
+    return { cols: cols.map((c) => c.label || c.q.label), rows };
+  }
+  function downloadCsv(form, responses) {
+    const { cols, rows } = responseRows(form, responses);
+    const cell = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = '﻿' + [cols].concat(rows).map((r) => r.map(cell).join(',')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = form.title.replace(/[^\w\s-]+/g, '').trim() + ' responses.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  // A form being typed into should not be redrawn by live sync, and leaving should ask first.
+  const setDirty = (v) => { ui.formDirty = v; if (v) window.addEventListener('beforeunload', leaveGuard); else window.removeEventListener('beforeunload', leaveGuard); };
+  window.addEventListener('hashchange', () => { if (ui.formDirty) setDirty(false); });
+
+  // ---- manager: list
+  function formStats(f) {
+    const resp = DB.responses.filter((r) => r.formId === f.id && f.audience.includes(r.personId));
+    return { sent: f.audience.length, done: resp.length, resp };
+  }
+  function pageForms(r) {
+    if (r.id === 'new' || (r.id && r.sub === 'edit')) return pageFormBuilder(r);
+    if (r.id) return pageFormDash(r);
+    const forms = DB.forms.slice().sort((a, b) => (a.updated < b.updated ? 1 : -1));
+    const card = (f) => {
+      const st = formStats(f), [lab, tone] = FORM_STATUS[f.status] || FORM_STATUS.draft, pct = st.sent ? Math.round((st.done / st.sent) * 100) : 0;
+      return `<a class="card form-card" href="#/forms/${esc(f.id)}"><div class="fc-top"><span class="pill ${tone}">${lab}</span>${f.due ? `<span class="muted" style="font-size:12.5px">Due ${fmtShort(f.due)}</span>` : ''}</div>
+        <h3>${esc(f.title)}</h3><div class="muted" style="font-size:12.5px">By ${esc(f.createdBy || '—')} · ${(f.schema.sections || []).reduce((n, s) => n + (s.questions || []).length, 0)} questions</div>
+        ${f.status === 'draft' ? '<div class="muted" style="font-size:13px;margin-top:10px">Not sent yet</div>' : `<div class="kpi-bar" style="margin-top:12px"><i style="width:${pct}%"></i></div><div style="font-size:13px;margin-top:6px"><b>${st.done}</b> of ${st.sent} submitted</div>`}</a>`;
+    };
+    const body = `<div class="page-head"><div><h1>Forms</h1><p>Collect information from VAs. They get an email, sign in, and their name is filled in for them.</p></div>
+        <div class="actions"><a class="btn btn-primary" href="#/forms/new">${ic('plus')}New form</a></div></div>
+      ${forms.length ? `<div class="form-cards">${forms.map(card).join('')}</div>` : `<section class="card"><div class="empty"><b>No forms yet</b>Create one, or start from the "VA client information" template.<div style="margin-top:12px"><a class="btn btn-primary" href="#/forms/new?template=client">${ic('plus')}Use the VA client template</a></div></div></section>`}`;
+    return { title: 'Forms', crumbs: '<b>Forms</b>', body };
+  }
+
+  // ---- manager: builder
+  function pageFormBuilder(r) {
+    const editing = r.id !== 'new' && DB.forms.find((f) => f.id === r.id);
+    if (!ui.fdraft || ui.fdraft._for !== (editing ? editing.id : 'new')) {
+      const tpl = /template=client/.test(location.hash) ? CLIENT_TEMPLATE() : null;
+      ui.fdraft = editing ? Object.assign(clone({ id: editing.id, title: editing.title, description: editing.description, schema: editing.schema, due: editing.due }), { _for: editing.id })
+        : Object.assign(tpl || { title: '', description: '', schema: { sections: [{ id: fid('s'), title: '', repeat: false, itemLabel: '', questions: [{ id: fid('q'), type: 'text', label: '', required: true }] }] } }, { _for: 'new', due: '' });
+    }
+    const f = ui.fdraft, answered = editing && formStats(editing).done;
+    const qHtml = (s, q, i, n) => `<div class="bq" data-s="${esc(s.id)}" data-q="${esc(q.id)}">
+        <div class="bq-row"><input class="input" data-bf="label" placeholder="Question" value="${esc(q.label)}">
+          <select class="select" data-bf="type">${Q_TYPES.map(([k, l]) => `<option value="${k}" ${q.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        ${q.type === 'select' || q.type === 'checkboxes' ? `<label class="field"><span>Options <span class="muted" style="font-weight:400">(one per line)</span></span><textarea class="textarea" data-bf="options" rows="4">${esc((q.options || []).join('\n'))}</textarea>${q.type === 'select' ? `<button type="button" class="btn btn-ghost btn-sm" data-act="b-states" style="align-self:flex-start">Fill with the 50 US states</button>` : ''}</label>` : ''}
+        <input class="input bq-help" data-bf="help" placeholder="Help text (optional)" value="${esc(q.help || '')}">
+        <div class="bq-foot"><label class="check"><input type="checkbox" data-bf="required" ${q.required ? 'checked' : ''}> Required</label>
+          <span class="right"><button type="button" class="icon-btn" data-act="b-up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${ic('chevron').replace('<svg', '<svg style="transform:rotate(-90deg)"')}</button><button type="button" class="icon-btn" data-act="b-down" ${i === n - 1 ? 'disabled' : ''} aria-label="Move down">${ic('chevron').replace('<svg', '<svg style="transform:rotate(90deg)"')}</button><button type="button" class="icon-btn" data-act="b-delq" aria-label="Delete question">${ic('x')}</button></span></div></div>`;
+    const secHtml = (s, si) => `<section class="card bsec" data-s="${esc(s.id)}"><div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+        <div class="bsec-head"><input class="input" data-bs="title" placeholder="Section title (e.g. Your clients)" value="${esc(s.title || '')}">${f.schema.sections.length > 1 ? `<button type="button" class="btn btn-ghost btn-sm btn-danger" data-act="b-delsec">Remove section</button>` : ''}</div>
+        <label class="check"><input type="checkbox" data-bs="repeat" ${s.repeat ? 'checked' : ''}> VAs can add this section more than once (e.g. once per client)</label>
+        ${s.repeat ? `<label class="field" style="max-width:280px"><span>Each entry is a…</span><input class="input" data-bs="itemLabel" placeholder="client" value="${esc(s.itemLabel || '')}"></label>` : ''}
+        ${(s.questions || []).map((q, i) => qHtml(s, q, i, s.questions.length)).join('')}
+        <div><button type="button" class="btn" data-act="b-addq">${ic('plus')}Add question</button></div></div></section>`;
+    const body = `<div class="page-head"><div><h1>${editing ? 'Edit form' : 'New form'}</h1><p>VAs' names are added automatically, so you don't need a "Name" question.</p></div>
+        <div class="actions">${!editing ? `<button class="btn" data-act="b-template">${ic('note')}Use VA client template</button>` : ''}<button class="btn btn-primary" data-act="b-save">${ic('check')}${editing ? 'Save changes' : 'Save form'}</button></div></div>
+      ${answered ? `<div class="banner">${ic('info')}<span>${answered} VA${answered === 1 ? ' has' : 's have'} already answered. Changing or removing questions can hide their earlier answers.</span></div>` : ''}
+      <div id="builder" class="builder">
+        <section class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+          <label class="field"><span>Form title</span><input class="input" data-bt="title" placeholder="e.g. VA Client Information" value="${esc(f.title)}"></label>
+          <label class="field"><span>Instructions <span class="muted" style="font-weight:400">(shown on the form and in the email)</span></span><textarea class="textarea" data-bt="description">${esc(f.description || '')}</textarea></label></div></section>
+        ${f.schema.sections.map(secHtml).join('')}
+        <div><button type="button" class="btn btn-ghost" data-act="b-addsec">${ic('plus')}Add section</button></div>
+      </div>`;
+    return {
+      title: editing ? 'Edit form' : 'New form', crumbs: `<a href="#/forms">Forms</a><span>/</span><b>${editing ? esc(editing.title) : 'New form'}</b>`, body,
+      after() {
+        $('#builder').addEventListener('input', (e) => {
+          const t = e.target, sEl = t.closest('[data-s]'), s = sEl && f.schema.sections.find((x) => x.id === sEl.dataset.s), qEl = t.closest('.bq'), q = qEl && s && s.questions.find((x) => x.id === qEl.dataset.q);
+          setDirty(true);
+          if (t.dataset.bt) f[t.dataset.bt] = t.value;
+          else if (t.dataset.bs && s) { if (t.dataset.bs === 'repeat') { s.repeat = t.checked; if (s.repeat && !s.itemLabel) s.itemLabel = 'client'; render(); } else s[t.dataset.bs] = t.value; }
+          else if (t.dataset.bf && q) {
+            if (t.dataset.bf === 'required') q.required = t.checked;
+            else if (t.dataset.bf === 'options') q.options = t.value.split('\n').map((x) => x.trim()).filter(Boolean);
+            else if (t.dataset.bf === 'type') { q.type = t.value; if ((q.type === 'select' || q.type === 'checkboxes') && !(q.options || []).length) q.options = ['Option 1', 'Option 2']; render(); }
+            else q[t.dataset.bf] = t.value;
+          }
+        });
+      },
+    };
+  }
+  function builderAction(act, el) {
+    const f = ui.fdraft; if (!f) return;
+    const sEl = el.closest('[data-s]'), s = sEl && f.schema.sections.find((x) => x.id === sEl.dataset.s), qEl = el.closest('.bq'), qi = qEl && s ? s.questions.findIndex((x) => x.id === qEl.dataset.q) : -1;
+    setDirty(true);
+    if (act === 'b-addq' && s) s.questions.push({ id: fid('q'), type: 'text', label: '', required: false });
+    else if (act === 'b-delq' && s) s.questions.splice(qi, 1);
+    else if (act === 'b-up' && s && qi > 0) s.questions.splice(qi - 1, 0, s.questions.splice(qi, 1)[0]);
+    else if (act === 'b-down' && s && qi < s.questions.length - 1) s.questions.splice(qi + 1, 0, s.questions.splice(qi, 1)[0]);
+    else if (act === 'b-states' && s) s.questions[qi].options = US_STATES.slice();
+    else if (act === 'b-addsec') f.schema.sections.push({ id: fid('s'), title: '', repeat: false, itemLabel: '', questions: [{ id: fid('q'), type: 'text', label: '', required: false }] });
+    else if (act === 'b-delsec' && s && confirm('Remove this section and its questions?')) f.schema.sections = f.schema.sections.filter((x) => x !== s);
+    else if (act === 'b-template') { if ((f.title || f.schema.sections.some((x) => x.questions.some((q) => q.label))) && !confirm('Replace what you have with the VA client template?')) return; ui.fdraft = Object.assign(CLIENT_TEMPLATE(), { _for: 'new', due: '' }); }
+    else if (act === 'b-save') return saveDraftForm();
+    render();
+  }
+  async function saveDraftForm() {
+    const f = ui.fdraft;
+    f.schema.sections.forEach((s) => { s.questions = s.questions.filter((q) => String(q.label || '').trim()); });
+    f.schema.sections = f.schema.sections.filter((s) => s.questions.length);
+    if (!String(f.title || '').trim()) { toast('Give the form a title', true); render(); return; }
+    if (!f.schema.sections.length) { toast('Add at least one question', true); f.schema.sections.push({ id: fid('s'), title: '', repeat: false, questions: [{ id: fid('q'), type: 'text', label: '', required: false }] }); render(); return; }
+    const bad = f.schema.sections.flatMap((s) => s.questions).find((q) => (q.type === 'select' || q.type === 'checkboxes') && !(q.options || []).length);
+    if (bad) { toast(`Add options for "${bad.label}"`, true); render(); return; }
+    const payload = { id: f._for === 'new' ? '' : f._for, title: f.title.trim(), description: f.description || '', schema: f.schema };
+    try {
+      inflight++; let j; try { j = await api('saveForm', { form: payload }); } finally { inflight--; }
+      setDirty(false); ui.fdraft = null;
+      await load(); toast('Form saved'); render.keepScroll = false; location.hash = '#/forms/' + (j.result && j.result.id);
+    } catch (e) { toast('Could not save: ' + e.message, true); }
+  }
+
+  // ---- manager: dashboard for one form
+  function pageFormDash(r) {
+    const f = DB.forms.find((x) => x.id === r.id);
+    if (!f) return { crumbs: '<a href="#/forms">Forms</a> / <b>Not found</b>', body: '<div class="card empty"><b>Form not found</b><a href="#/forms">Back to Forms</a></div>' };
+    const st = formStats(f), [lab, tone] = FORM_STATUS[f.status] || FORM_STATUS.draft, tab = ['people', 'responses', 'questions'].includes(r.sub) ? r.sub : f.status === 'draft' ? 'questions' : 'people';
+    const pending = f.audience.filter((pid) => !st.resp.some((x) => x.personId === pid));
+    const pct = st.sent ? Math.round((st.done / st.sent) * 100) : 0;
+    const actions = f.status === 'draft' ? `<a class="btn" href="#/forms/${esc(f.id)}/edit">${ic('edit')}Edit</a><button class="btn btn-primary" data-act="f-launch" data-id="${esc(f.id)}">${ic('chat')}Launch & email VAs</button>`
+      : f.status === 'open' ? `<a class="btn btn-ghost" href="#/forms/${esc(f.id)}/edit">${ic('edit')}Edit</a><button class="btn" data-act="f-launch" data-id="${esc(f.id)}">${ic('plus')}Send to more VAs</button>${pending.length ? `<button class="btn" data-act="f-remind" data-id="${esc(f.id)}">${ic('clock')}Remind ${pending.length}</button>` : ''}<button class="btn" data-act="f-status" data-id="${esc(f.id)}" data-s="closed">Close form</button>`
+      : `<a class="btn btn-ghost" href="#/forms/${esc(f.id)}/edit">${ic('edit')}Edit</a><button class="btn" data-act="f-status" data-id="${esc(f.id)}" data-s="open">Reopen</button>`;
+    let content = '';
+    if (tab === 'people') {
+      const row = (pid) => { const p = person(pid), resp = st.resp.find((x) => x.personId === pid); return `<li>${avatar(p || { id: pid, name: '?' })}<div class="grow"><div class="title">${esc(p ? p.name : 'Removed VA')} ${p ? `<span class="role-tag">${esc(p.role)}</span>` : ''}</div><div class="meta">${resp ? `Submitted ${fmt(resp.submitted, { day: 'numeric', month: 'short' })}${resp.updated !== resp.submitted ? ' · updated ' + ago(resp.updated) : ''}` : esc(p && p.email ? p.email : '')}</div></div>
+        ${resp ? `<span class="pill tone-good">Submitted</span><button class="btn btn-sm" data-act="f-view" data-id="${esc(resp.id)}">View</button>` : '<span class="pill tone-warn">Pending</span>'}</li>`; };
+      content = f.audience.length ? `<section class="card"><ul class="list">${st.resp.map((x) => x.personId).concat(pending).map(row).join('')}</ul></section>` : `<section class="card"><div class="empty"><b>Not sent yet</b>Launch the form to email your VAs.</div></section>`;
+    } else if (tab === 'responses') {
+      const { cols, rows } = responseRows(f, st.resp);
+      content = rows.length ? `<section class="card"><div class="table-wrap resp-wrap"><table class="table resp-table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((rw) => `<tr>${rw.map((v) => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>` : '<section class="card"><div class="empty"><b>No responses yet</b>Answers appear here as VAs submit.</div></section>';
+    } else content = `<div class="form-preview">${formBodyHtml(f.schema, {}, true)}</div>`;
+    const body = `<section class="card form-dash-head"><div class="card-body">
+        <div class="fdh-top"><div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h1>${esc(f.title)}</h1><span class="pill ${tone}">${lab}</span></div>
+          <div class="muted" style="font-size:13px;margin-top:4px">Created by ${esc(f.createdBy || '—')}${f.launched ? ' · sent ' + fmt(f.launched) : ''}${f.due ? ' · due ' + fmt(f.due) : ''}</div></div>
+          <div class="actions">${actions}<button class="btn btn-ghost btn-danger" data-act="f-more" data-id="${esc(f.id)}">Delete</button></div></div>
+        ${f.status !== 'draft' ? `<div class="fdh-prog"><div class="kpi-bar"><i style="width:${pct}%"></i></div><span><b>${st.done}</b> of ${st.sent} submitted · ${pending.length} pending</span></div>` : ''}</div>
+        <div class="tabs" role="tablist">${[['people', `People <span class="muted">${st.sent || ''}</span>`], ['responses', `Responses <span class="muted">${st.done || ''}</span>`], ['questions', 'Questions']].map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-act="go" data-id="#/forms/${esc(f.id)}/${k}">${l}</button>`).join('')}
+          ${st.done ? `<button class="btn btn-sm btn-ghost right" data-act="f-csv" data-id="${esc(f.id)}" style="margin:6px 0">${ic('download')}Download CSV</button>` : ''}</div></section>
+      ${content}`;
+    return { title: f.title, crumbs: `<a href="#/forms">Forms</a><span>/</span><b>${esc(f.title)}</b>`, body };
+  }
+  function launchDialog(id) {
+    const f = DB.forms.find((x) => x.id === id); if (!f) return;
+    const people = activePeople().filter((p) => p.email).sort((a, b) => a.name.localeCompare(b.name));
+    const noMail = activePeople().filter((p) => !p.email && !/AE/.test(p.role));
+    const already = (pid) => f.audience.includes(pid);
+    modal({
+      title: f.status === 'draft' ? 'Launch form' : 'Send to more VAs', sub: esc(f.title), submit: f.status === 'draft' ? 'Launch' : 'Send', wide: false,
+      body: `<div class="field"><span>Send to</span><div class="launch-tools"><button type="button" class="btn btn-ghost btn-sm" data-pick="all">Select all</button><button type="button" class="btn btn-ghost btn-sm" data-pick="none">Clear</button></div>
+          <div class="launch-list">${people.map((p) => `<label class="check"><input type="checkbox" name="aud" value="${esc(p.id)}" ${already(p.id) ? 'checked disabled' : f.status === 'draft' ? 'checked' : ''}> ${esc(p.name)} <span class="muted">· ${esc(p.role)}${already(p.id) ? ' · already sent' : ''}</span></label>`).join('')}</div>
+          ${noMail.length ? `<small>Not listed (no Gmail on their profile): ${noMail.map((p) => esc(p.name)).join(', ')}</small>` : ''}</div>
+        <label class="field"><span>Due date <span class="muted" style="font-weight:400">(optional)</span></span><input class="input" type="date" name="due" value="${esc(f.due || '')}"></label>
+        <label class="check"><input type="checkbox" name="notify" checked> Email them a link now</label>`,
+      onMount(d) { $$('[data-pick]', d).forEach((b) => b.addEventListener('click', () => $$('input[name=aud]:not(:disabled)', d).forEach((x) => (x.checked = b.dataset.pick === 'all')))); },
+      onSubmit(fd, form) {
+        const aud = $$('input[name=aud]:checked:not(:disabled)', form).map((x) => x.value);
+        if (!aud.length && f.status !== 'draft') { toast('Choose at least one VA', true); return false; }
+        if (!aud.length) { toast('Choose at least one VA', true); return false; }
+        (async () => {
+          toast('Sending…', false, 'chat');
+          try { inflight++; let j; try { j = await api('launchForm', { id, audience: aud, due: fd.get('due') || '', notify: !!fd.get('notify') }); } finally { inflight--; }
+            const res = j.result || {}; await load(); render();
+            toast(fd.get('notify') ? `Emailed ${res.sent} VA${res.sent === 1 ? '' : 's'}${res.failed && res.failed.length ? ` · ${res.failed.length} failed` : ''}` : 'Form opened', !!(res.failed && res.failed.length));
+          } catch (e) { toast('Could not launch: ' + e.message, true); }
+        })();
+      },
+    });
+  }
+  function viewResponse(rid) {
+    const r = DB.responses.find((x) => x.id === rid), f = r && DB.forms.find((x) => x.id === r.formId); if (!r || !f) return;
+    modal({ title: esc(r.person), sub: `${esc(f.title)} · submitted ${fmt(r.submitted)}${r.updated !== r.submitted ? ', updated ' + fmt(r.updated) : ''}`, wide: true, submit: 'Close', body: `<div class="form-preview">${formBodyHtml(f.schema, r.answers, true)}</div>`, onSubmit() {} });
+  }
+  function formMore(id) {
+    const f = DB.forms.find((x) => x.id === id); if (!f) return;
+    const n = formStats(f).done;
+    if (!confirm(`Delete "${f.title}"${n ? ` and its ${n} response${n === 1 ? '' : 's'}` : ''}?\n\nThis cannot be undone.${f.status === 'open' ? ' To stop new answers but keep everything, use "Close form" instead.' : ''}`)) return;
+    save('deleteForm', { id }, () => { DB.forms = DB.forms.filter((x) => x.id !== id); DB.responses = DB.responses.filter((x) => x.formId !== id); }, 'Form deleted');
+    location.hash = '#/forms';
+  }
+
+  // ---- VA: list and fill-in
+  const vaFormsPending = () => (DB.forms || []).filter((f) => f.status === 'open' && !f.response);
+  function vaFormsPage() {
+    const list = (DB.forms || []).slice().sort((a, b) => (a.status === b.status ? (a.due || '9') < (b.due || '9') ? -1 : 1 : a.status === 'open' ? -1 : 1));
+    const row = (f) => `<li style="cursor:pointer" data-act="go" data-id="#/forms/${esc(f.id)}"><span class="doc-ico">${ic('note')}</span><div class="grow"><div class="title">${esc(f.title)}</div><div class="meta">${f.due ? 'Due ' + fmt(f.due) : 'No due date'}${f.response ? ' · last saved ' + ago(f.response.updated) : ''}</div></div>
+      ${f.status === 'closed' ? '<span class="pill tone-bad">Closed</span>' : f.response ? '<span class="pill tone-good">Submitted</span>' : '<span class="pill tone-warn">To do</span>'}</li>`;
+    return `<div class="page-head"><div><h1>Forms</h1><p>Forms your manager asked you to fill in. You can update your answers until a form closes.</p></div></div>
+      ${list.length ? `<section class="card"><ul class="list">${list.map(row).join('')}</ul></section>` : '<section class="card"><div class="empty"><b>Nothing to fill in</b>When your manager sends you a form, it appears here and in your email.</div></section>'}`;
+  }
+  function vaFormFill(id) {
+    const f = (DB.forms || []).find((x) => x.id === id);
+    if (!f) return `<section class="card"><div class="empty"><b>Form not found</b>It may have been removed, or it wasn't sent to you. <a href="#/forms">Back to Forms</a></div></section>`;
+    const ro = f.status !== 'open', p = DB.profile || {};
+    const ans = (ui.fanswers && ui.fanswers._for === id) ? ui.fanswers : (f.response ? f.response.answers : {});
+    return `<section class="card" style="margin-bottom:20px"><div class="card-body">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h1 style="margin:0">${esc(f.title)}</h1>${ro ? '<span class="pill tone-bad">Closed</span>' : f.response ? '<span class="pill tone-good">Submitted</span>' : ''}</div>
+        ${f.description ? `<p class="muted" style="white-space:pre-wrap;margin:8px 0 0">${esc(f.description)}</p>` : ''}
+        <div class="fill-who">${avatar({ id: 'm', name: p.name || ME })}<div><div style="font-weight:600">${esc(p.name || ME)}</div><div class="muted" style="font-size:12.5px">${esc(p.role || 'VA')} · filled in automatically</div></div>${f.due ? `<span class="pill plain ${!ro && daysSince(f.due) > 0 ? 'tone-bad' : 'tone-info'} right">Due ${fmt(f.due)}</span>` : ''}</div>
+        ${ro ? '<div class="banner" style="margin:14px 0 0">' + ic('info') + '<span>This form is closed, so your answers can no longer be changed.</span></div>' : f.response ? `<div class="muted" style="font-size:13px;margin-top:12px">You submitted this on ${fmt(f.response.submitted)}. Change anything below and save again.</div>` : ''}
+      </div></section>
+      <form id="va-form" novalidate>${formBodyHtml(f.schema, ans, ro)}
+        ${ro ? '' : `<div class="fill-actions"><span class="req-note"><span class="req">*</span> required</span><button class="btn btn-primary">${ic('check')}${f.response ? 'Save changes' : 'Submit'}</button></div>`}</form>`;
+  }
+  function wireVaForm(id) {
+    const form = $('#va-form'); if (!form) return;
+    const f = DB.forms.find((x) => x.id === id);
+    form.addEventListener('input', () => setDirty(true));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const a = collectAnswers(form, f.schema), msg = checkAnswers(f.schema, a);
+      if (msg) { toast(msg, true); return; }
+      const btn = form.querySelector('.fill-actions .btn'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span>Saving…';
+      try {
+        inflight++; try { await api('submitForm', { formId: id, answers: a }); } finally { inflight--; }
+        setDirty(false); ui.fanswers = null; await load(); render(); toast(f.response ? 'Your changes are saved' : 'Thank you! Your answers are submitted');
+      } catch (err) { toast(err.message, true); btn.disabled = false; btn.innerHTML = ic('check') + (f.response ? 'Save changes' : 'Submit'); }
+    });
+  }
+  function repeatItem(el, add) {
+    const root = el.closest('form, .form-preview, #page'), id = route().id;
+    const f = DB.va ? DB.forms.find((x) => x.id === id) : null; if (!f) return;
+    const a = collectAnswers(root, f.schema), sid = el.dataset.sec;
+    a[sid] = a[sid] || [];
+    if (add) a[sid].push({}); else a[sid].splice(Number(el.dataset.idx), 1);
+    ui.fanswers = Object.assign(a, { _for: id }); setDirty(true); render.keepScroll = true; render();
+    if (add) { const items = $$(`.fsec[data-rsec="${sid}"] .fitem`); const last = items[items.length - 1]; if (last) { last.scrollIntoView({ block: 'center', behavior: 'smooth' }); const i = last.querySelector('input,textarea,select'); if (i) i.focus(); } }
+  }
+
   /* ------------------------------------------------------------------ VA view ("My Portal")
      What a signed-in VA sees. The server only sends their own profile and the trainings they are in:
      no ratings, targets, notes, other VAs or manager data ever reach this page. */
@@ -1153,8 +1465,11 @@
       <div style="text-align:right"><span class="pill ${STATUS_TONE[t.status] || 'tone-info'}">${esc(t.status)}</span><div class="meta" style="${t.status !== 'Completed' && t.due && daysSince(t.due) > 0 ? 'color:var(--bad);font-weight:600' : ''}">${t.status === 'Completed' ? 'Done' : t.due ? (daysSince(t.due) > 0 ? 'Overdue · ' : 'Due ') + fmtShort(t.due) : ''}</div></div></li>`;
     const section = (title, sub, list, empty) => `<section class="card"><div class="card-head"><h2>${title}</h2><span class="sub">${sub}</span></div>${list.length ? `<ul class="list">${list.map(item).join('')}</ul>` : `<div class="empty">${empty}</div>`}</section>`;
     const first = String(p.name || ME).split(' ')[0];
-    const onGuides = route().page === 'guides';
-    const vnav = (m) => [['#/', 'home', 'My portal', !onGuides], ['#/guides', 'book', 'Guidebooks', onGuides]].map(([h, i, l, cur]) => `<a href="${h}" ${cur ? 'aria-current="page"' : ''}>${ic(i)}<span>${l}</span></a>`).join('');
+    const vr = route(), onGuides = vr.page === 'guides', onForms = vr.page === 'forms';
+    const pend = vaFormsPending().length;
+    const vnav = (m) => [['#/', 'home', 'My portal', !onGuides && !onForms], ['#/forms', 'note', 'Forms', onForms, pend], ['#/guides', 'book', 'Guidebooks', onGuides]].map(([h, i, l, cur, n]) => `<a href="${h}" ${cur ? 'aria-current="page"' : ''}>${ic(i)}<span>${l}</span>${n ? `<span class="${m ? 'dot-count' : 'count count-new'}">${n}</span>` : ''}</a>`).join('');
+    const formsCard = (d.forms || []).length ? `<section class="card" style="margin-bottom:20px"><div class="card-head"><h2>Forms to fill</h2><span class="sub">${pend ? `<span class="pill plain tone-warn">${pend} to do</span>` : 'All done'}</span><a class="btn btn-ghost btn-sm right" href="#/forms">Open ${ic('chevron')}</a></div>
+            ${pend ? `<ul class="list">${vaFormsPending().map((f) => `<li style="cursor:pointer" data-act="go" data-id="#/forms/${esc(f.id)}"><span class="doc-ico">${ic('note')}</span><div class="grow"><div class="title">${esc(f.title)}</div><div class="meta">${f.due ? 'Due ' + fmt(f.due) : 'No due date'}</div></div><span class="btn btn-sm btn-primary">Fill in</span></li>`).join('')}</ul>` : ''}</section>` : '';
     const guidesPage = `<div class="page-head"><div><h1>Guidebooks</h1><p>Read the training guidebooks here or download them to keep.</p></div></div>
           <div class="toolbar"><label class="search-field">${ic('search')}<span class="sr-only">Search guidebooks</span><input class="input" id="doc-q" type="search" placeholder="Search guidebooks" value="${esc(ui.docQuery || '')}"></label></div>
           <div id="docs-list">${guidesHtml(d.docs || [], false)}</div>`;
@@ -1167,8 +1482,9 @@
       </aside>
       <div class="main">
         <header class="topbar"><a class="mobile-brand" href="#/">${MARK}<b>${esc(d.settings.teamName)}</b></a><span class="right"><button type="button" class="btn btn-sm btn-ghost va-signout" data-act="sign-out">${ic('logout')}Sign out</button></span></header>
-        <main class="page" id="page">${onGuides ? guidesPage : `
+        <main class="page" id="page">${onForms ? (vr.id ? vaFormFill(vr.id) : vaFormsPage()) : onGuides ? guidesPage : `
           <section class="hero"><div><h1>${greeting()}, ${esc(first)}</h1><p>${fmt(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(p.role || 'VA')}${p.account ? ' · ' + esc(p.account) : ''}</p></div></section>
+          ${formsCard}
           <div class="grid grid-2e" style="align-items:start;margin-bottom:20px">
             ${section('My training', 'Skills you are learning', open(mine), 'No training assigned right now.')}
             ${teach.length ? section('Training others', 'VAs you are helping', open(teach), 'Nobody to train right now.') : `<section class="card"><div class="card-head"><h2>Quizzes</h2><span class="sub">Coming soon</span></div><div class="card-body muted">Practice quizzes and skill assessments will appear here, one for each skill guidebook.</div></section>`}
@@ -1178,8 +1494,9 @@
           ${done(mine).length + done(teach).length ? section('Completed', 'Finished trainings', done(mine).concat(done(teach)), '') : ''}`}
         </main>
       </div>
-      <nav class="tabbar va-tabbar" aria-label="Main">${vnav()}</nav></div>`;
-    document.title = (onGuides ? 'Guidebooks' : 'My portal') + ' · ' + d.settings.teamName + ' Training Portal';
+      <nav class="tabbar va-tabbar" aria-label="Main">${vnav(true)}</nav></div>`;
+    document.title = (onForms ? 'Forms' : onGuides ? 'Guidebooks' : 'My portal') + ' · ' + d.settings.teamName + ' Training Portal';
+    if (onForms && vr.id) wireVaForm(vr.id);
     const dq = $('#doc-q'); if (dq) dq.addEventListener('input', (e) => { ui.docQuery = e.target.value; $('#docs-list').innerHTML = guidesHtml(d.docs || [], false); });
   }
 
@@ -1547,7 +1864,7 @@
     d.innerHTML = `<div class="palette-input">${ic('search')}<input type="text" placeholder="Search VAs, pages or actions…" aria-label="Search" autocomplete="off"></div><ul class="palette-list" role="listbox"></ul>`;
     document.body.appendChild(d);
     const input = $('input', d), list = $('ul', d);
-    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Guidebooks', '#/guides'], ['Users', '#/users'], ['Settings', '#/settings']];
+    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Guidebooks', '#/guides'], ['Forms', '#/forms'], ['Users', '#/users'], ['Settings', '#/settings']];
     const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()], ['Post a team note', () => newTeamNote()]];
     let items = [], sel = 0;
     const draw = () => {
@@ -1631,6 +1948,15 @@
       case 'del-rating': return deleteSkillRating(id, el.dataset.skill);
       case 'del-session': return deleteSession(id, el.dataset.day, el.dataset.manager);
       case 'tnote-new': return newTeamNote();
+      case 'b-addq': case 'b-delq': case 'b-up': case 'b-down': case 'b-states': case 'b-addsec': case 'b-delsec': case 'b-template': case 'b-save': return builderAction(el.dataset.act, el);
+      case 'f-launch': return launchDialog(id);
+      case 'f-remind': return (async () => { try { toast('Sending reminders…', false, 'clock'); inflight++; let j; try { j = await api('remindForm', { id }); } finally { inflight--; } const r = j.result || {}; toast(`Reminded ${r.sent} VA${r.sent === 1 ? '' : 's'}${r.failed && r.failed.length ? ' · ' + r.failed.length + ' failed' : ''}`, !!(r.failed && r.failed.length)); } catch (e2) { toast(e2.message, true); } })();
+      case 'f-status': { const st = el.dataset.s; const f = DB.forms.find((x) => x.id === id); if (st === 'closed' && !confirm('Close this form? VAs will no longer be able to submit or change answers. You can reopen it later.')) return; return save('setFormStatus', { id, status: st }, () => { f.status = st; }, st === 'closed' ? 'Form closed' : 'Form reopened'); }
+      case 'f-view': return viewResponse(id);
+      case 'f-csv': { const f = DB.forms.find((x) => x.id === id); return downloadCsv(f, formStats(f).resp); }
+      case 'f-more': return formMore(id);
+      case 'f-add-item': return repeatItem(el, true);
+      case 'f-del-item': return repeatItem(el, false);
       case 'attn-filter': ui.attnFilter = id; $$('.hd-tabs [data-act=attn-filter]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.id === id))); $('#attn-list').innerHTML = attnList(derive()); return;
       case 'gap-all': ui.gapAll = !ui.gapAll; $('#gap-rows').innerHTML = gapRows(derive()); return;
       case 'doc-read': return withDoc(id, el, readDoc);

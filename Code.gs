@@ -33,6 +33,8 @@ const TABS = {
   settings: { name: 'Portal Settings', headers: ['Key', 'Value'] },
   managers: { name: 'Managers', headers: ['Name', 'Email', 'Added', 'Added by'] },
   teamNotes: { name: 'Team Notes', headers: ['ID', 'Date', 'Manager', 'Note', 'Pinned', 'Edited'] },
+  forms: { name: 'Forms', headers: ['ID', 'Title', 'Description', 'Schema', 'Status', 'Audience', 'Due', 'Created', 'Created by', 'Launched', 'Updated'] },
+  responses: { name: 'Form Responses', headers: ['ID', 'Form ID', 'Person ID', 'Person', 'Answers', 'Submitted', 'Updated'] },
   docs: { name: 'Documents', headers: ['ID', 'Title', 'Group', 'Audience', 'File ID', 'File name', 'Type', 'Size', 'Pages', 'Key', 'Order', 'Uploaded', 'Uploaded by'] },
 };
 
@@ -94,6 +96,7 @@ function setup() {
   if (!st.managers) setSetting_('managers', '');
   UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo', { muteHttpExceptions: true }); // asks for the sign-in check permission
   docsFolder_(); // asks for Drive permission and creates the private documents folder
+  MailApp.getRemainingDailyQuota(); // asks for the send-email permission used by form invitations
   safeAlert_('Team Troy portal is set up. Now deploy it as a web app (see the notes at the top of Code.gs).');
 }
 
@@ -132,6 +135,12 @@ function doPost(e) {
       if (req.action === 'getAll') return json_({ ok: true, data: getMine_(me), rev: rev_(), me: me });
       if (req.action === 'rev') return json_({ ok: true, rev: rev_() });
       if (req.action === 'getDoc') return json_({ ok: true, doc: getDoc_(req.id, me) });
+      if (req.action === 'submitForm') {
+        const lock = LockService.getScriptLock();
+        lock.waitLock(20000);
+        try { submitForm_(req.formId, req.answers, me); bumpRev_(me.name); } finally { lock.releaseLock(); }
+        return json_({ ok: true, rev: rev_() });
+      }
       return json_({ ok: false, error: "You don't have permission to do that.", code: 'forbidden' });
     }
     if (req.action === 'getAll') { ensureScale10_(); migrateManagers_(); return json_({ ok: true, data: getAll_(), rev: rev_(), me: me }); }
@@ -139,8 +148,14 @@ function doPost(e) {
     if (req.action === 'getDoc') return json_({ ok: true, doc: getDoc_(req.id, me) });
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
+    let result = null;
     try {
       switch (req.action) {
+        case 'saveForm': result = saveForm_(req.form || {}, me); break;
+        case 'launchForm': result = launchForm_(req.id, req.audience || [], req.due, req.notify !== false, me); break;
+        case 'remindForm': result = remindForm_(req.id, me); break;
+        case 'setFormStatus': setFormStatus_(req.id, req.status); break;
+        case 'deleteForm': deleteWhere_('responses', 'Form ID', req.id); deleteWhere_('forms', 'ID', req.id); break;
         case 'savePerson': upsert_('team', 'ID', personRow_(req.person)); break;
         case 'saveRatings': (req.rows || []).forEach((r) => (r.manager = me.name)); if (req.note) req.note.manager = me.name; saveRatings_(req.rows || [], req.note); break;
         case 'deleteRatings': deleteRatings_(req.keys || []); break;
@@ -162,7 +177,7 @@ function doPost(e) {
       }
       bumpRev_(me.name);
     } finally { lock.releaseLock(); }
-    return json_({ ok: true, rev: rev_() });
+    return json_({ ok: true, rev: rev_(), result: result });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
   }
@@ -285,6 +300,8 @@ function getAll_() {
     notes: read_('notes').map((n) => ({ id: n.ID, personId: n['Person ID'], ts: n.Date, type: n.Type || 'Note', text: n.Note, manager: n.Manager })),
     teamNotes: read_('teamNotes').map((n) => ({ id: n.ID, ts: n.Date, manager: n.Manager, text: n.Note, pinned: String(n.Pinned || '').toUpperCase() === 'Y', edited: n.Edited })),
     docs: listDocs_('manager'),
+    forms: readForms_(),
+    responses: readResponses_(),
     managerList: readManagers_().map((m) => ({ name: m.name, email: m.email, owner: !!m.email && m.email === ownerEmail_() })),
     settings: (function () { const s = readSettings_(); return { teamName: s.teamName || 'Team Troy', reassessDays: Number(s.reassessDays) || 45, managers: readManagers_().map((m) => m.name) }; })(),
   };
@@ -308,6 +325,7 @@ function getMine_(me) {
       return { id: t.ID, as: asTrainee ? 'trainee' : 'trainer', with: nameOf(other), withRole: roleOf(other), skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), start: t.Start, due: t.Due, status: t.Status || 'Planned' };
     }),
     docs: listDocs_('va'),
+    forms: myForms_(me),
     settings: { teamName: readSettings_().teamName || 'Team Troy' },
   };
 }
@@ -496,6 +514,137 @@ function deleteDoc_(id) {
   if (!row) return;
   try { DriveApp.getFileById(row['File ID']).setTrashed(true); } catch (e) {} // Drive trash keeps it for 30 days
   deleteWhere_('docs', 'ID', id);
+}
+
+/* ============================== forms ============================== */
+// Managers build a form, launch it to chosen VAs (who get an email), and see every response.
+// A VA can only open and answer forms they were sent, and only while the form is open.
+// Schema: { sections: [{ id, title, repeat, itemLabel, questions: [{ id, type, label, required, options, help }] }] }
+// Answers: { questionId: value, repeatingSectionId: [ { questionId: value }, ... ] }
+
+const PORTAL_URL = 'https://eric-renolds.github.io/team-troy-training/';
+const parseJson_ = (v, d) => { try { return v ? JSON.parse(v) : d; } catch (e) { return d; } };
+
+function readForms_() {
+  return read_('forms').map((f) => ({
+    id: f.ID, title: f.Title, description: f.Description || '', schema: parseJson_(f.Schema, { sections: [] }), status: f.Status || 'draft',
+    audience: parseJson_(f.Audience, []), due: f.Due || '', created: f.Created, createdBy: f['Created by'], launched: f.Launched || '', updated: f.Updated,
+  }));
+}
+function readResponses_(formId, personId) {
+  return read_('responses')
+    .filter((r) => (!formId || r['Form ID'] === formId) && (!personId || r['Person ID'] === personId))
+    .map((r) => ({ id: r.ID, formId: r['Form ID'], personId: r['Person ID'], person: r.Person, answers: parseJson_(r.Answers, {}), submitted: r.Submitted, updated: r.Updated }));
+}
+function formRowObj_(f) {
+  return { ID: f.id, Title: f.title, Description: f.description || '', Schema: JSON.stringify(f.schema || { sections: [] }), Status: f.status || 'draft', Audience: JSON.stringify(f.audience || []), Due: f.due || '', Created: f.created || '', 'Created by': f.createdBy || '', Launched: f.launched || '', Updated: new Date().toISOString() };
+}
+
+function saveForm_(f, me) {
+  const title = String(f.title || '').trim();
+  if (!title) throw new Error('Give the form a title');
+  const schema = f.schema && Array.isArray(f.schema.sections) ? f.schema : { sections: [] };
+  if (!schema.sections.some((s) => (s.questions || []).length)) throw new Error('Add at least one question');
+  const existing = f.id ? readForms_().find((x) => x.id === f.id) : null;
+  const rec = Object.assign({}, existing || { id: id_('f'), status: 'draft', audience: [], created: new Date().toISOString(), createdBy: me.name }, { title: title, description: String(f.description || ''), schema: schema });
+  if (f.due != null) rec.due = f.due;
+  upsert_('forms', 'ID', formRowObj_(rec));
+  return { id: rec.id };
+}
+
+// Opens the form for the chosen VAs. People added on a later launch are emailed; earlier ones are not emailed again.
+function launchForm_(id, audience, due, notify, me) {
+  const f = readForms_().find((x) => x.id === id);
+  if (!f) throw new Error('That form no longer exists.');
+  const team = read_('team');
+  const valid = audience.filter((pid) => team.some((p) => p.ID === pid && normEmail_(p.Email) && String(p.Active || 'Y').toUpperCase() !== 'N'));
+  if (!valid.length) throw new Error('Choose at least one VA who has a Gmail on their profile');
+  const added = valid.filter((pid) => f.audience.indexOf(pid) < 0);
+  f.audience = f.audience.concat(added);
+  if (due != null) f.due = due;
+  f.status = 'open';
+  if (!f.launched) f.launched = new Date().toISOString();
+  upsert_('forms', 'ID', formRowObj_(f));
+  return notify ? emailPeople_(f, added, 'invite', me) : { sent: 0, failed: [] };
+}
+
+function remindForm_(id, me) {
+  const f = readForms_().find((x) => x.id === id);
+  if (!f) throw new Error('That form no longer exists.');
+  if (f.status !== 'open') throw new Error('Reopen the form before sending reminders');
+  const done = readResponses_(id).map((r) => r.personId);
+  return emailPeople_(f, f.audience.filter((pid) => done.indexOf(pid) < 0), 'reminder', me);
+}
+
+function setFormStatus_(id, status) {
+  const f = readForms_().find((x) => x.id === id);
+  if (!f) throw new Error('That form no longer exists.');
+  if (['open', 'closed', 'draft'].indexOf(status) < 0) throw new Error('Unknown status');
+  f.status = status;
+  upsert_('forms', 'ID', formRowObj_(f));
+}
+
+function emailPeople_(f, ids, kind, me) {
+  const team = {}; read_('team').forEach((p) => (team[p.ID] = p));
+  const link = PORTAL_URL + '#/forms/' + f.id;
+  const due = f.due ? Utilities.formatDate(new Date(f.due + 'T12:00:00'), 'UTC', 'EEEE d MMMM') : '';
+  const out = { sent: 0, failed: [] };
+  ids.forEach((pid) => {
+    const p = team[pid], email = p && normEmail_(p.Email);
+    if (!email) { out.failed.push((p && p.Name) || pid); return; }
+    const first = String(p.Name || '').split(' ')[0];
+    const subject = (kind === 'reminder' ? 'Reminder: ' : '') + 'Please fill in: ' + f.title + (due ? ' (due ' + due + ')' : '');
+    const html = '<div style="font-family:Arial,sans-serif;font-size:15px;color:#14213D;line-height:1.5">' +
+      '<p>Hi ' + escHtml_(first) + ',</p>' +
+      '<p>' + (kind === 'reminder' ? 'This is a reminder to fill in' : escHtml_(me.name) + ' has asked you to fill in') + ' <b>' + escHtml_(f.title) + '</b> on the Team Troy Training Portal' + (due ? ' by <b>' + due + '</b>' : '') + '.</p>' +
+      (f.description ? '<p style="color:#46506A">' + escHtml_(f.description).replace(/\n/g, '<br>') + '</p>' : '') +
+      '<p><a href="' + link + '" style="display:inline-block;background:#14213D;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:bold">Open the form</a></p>' +
+      '<p style="color:#646B7C;font-size:13px">Sign in with this Gmail (' + escHtml_(email) + ') when asked. Your name is filled in for you, and you can update your answers until the form closes.</p></div>';
+    try { MailApp.sendEmail({ to: email, subject: subject, htmlBody: html, name: 'Team Troy Training Portal' }); out.sent++; }
+    catch (e) { out.failed.push(p.Name + ' (' + e.message + ')'); }
+  });
+  return out;
+}
+function escHtml_(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
+
+// The forms a VA was sent (never drafts), with their own answers only.
+function myForms_(me) {
+  const mine = readResponses_(null, me.personId);
+  return readForms_().filter((f) => f.status !== 'draft' && f.audience.indexOf(me.personId) >= 0).map((f) => {
+    const r = mine.find((x) => x.formId === f.id);
+    return { id: f.id, title: f.title, description: f.description, schema: f.schema, status: f.status, due: f.due, response: r ? { answers: r.answers, submitted: r.submitted, updated: r.updated } : null };
+  });
+}
+
+function submitForm_(formId, answers, me) {
+  const f = readForms_().find((x) => x.id === formId);
+  if (!f || f.status === 'draft' || f.audience.indexOf(me.personId) < 0) throw new Error("This form wasn't sent to you.");
+  if (f.status !== 'open') throw new Error('This form is closed. Ask your manager to reopen it.');
+  const clean = cleanAnswers_(f.schema, answers || {});
+  const now = new Date().toISOString();
+  const old = read_('responses').find((r) => r['Form ID'] === formId && r['Person ID'] === me.personId);
+  upsert_('responses', 'ID', { ID: old ? old.ID : id_('r'), 'Form ID': formId, 'Person ID': me.personId, Person: me.name, Answers: JSON.stringify(clean), Submitted: old ? old.Submitted : now, Updated: now });
+}
+
+// Keeps only answers to questions on the form, trims text, and checks required ones.
+function cleanAnswers_(schema, a) {
+  const one = (q, v) => {
+    if (q.type === 'checkboxes') { v = Array.isArray(v) ? v.map(String).filter((x) => (q.options || []).indexOf(x) >= 0) : []; if (q.required && !v.length) throw new Error('Please answer: ' + q.label); return v; }
+    v = String(v == null ? '' : v).trim().slice(0, 5000);
+    if (q.required && !v) throw new Error('Please answer: ' + q.label);
+    if (v && q.type === 'select' && (q.options || []).indexOf(v) < 0) throw new Error('Choose an option for: ' + q.label);
+    if (v && q.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new Error('Enter a valid email for: ' + q.label);
+    return v;
+  };
+  const out = {};
+  (schema.sections || []).forEach((s) => {
+    if (s.repeat) {
+      const items = Array.isArray(a[s.id]) ? a[s.id].slice(0, 50) : [];
+      if (!items.length) throw new Error('Add at least one ' + (s.itemLabel || 'entry') + ' in: ' + (s.title || 'the form'));
+      out[s.id] = items.map((it) => { const o = {}; (s.questions || []).forEach((q) => (o[q.id] = one(q, (it || {})[q.id]))); return o; });
+    } else (s.questions || []).forEach((q) => (out[q.id] = one(q, a[q.id])));
+  });
+  return out;
 }
 
 /* ============================== live sync ============================== */
