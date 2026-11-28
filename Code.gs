@@ -751,6 +751,11 @@ const CLIENT_TRACKED = { vaId: 'VA', span: 'Span', shift: 'Shift', status: 'Stat
 function clientObj_(r) {
   const o = { id: r.ID, notes: parseJson_(r.Notes, []), history: parseJson_(r.History, []), created: r.Created, updated: r.Updated };
   Object.keys(CLIENT_FIELDS).forEach((k) => (o[k] = r[CLIENT_FIELDS[k]] == null ? '' : String(r[CLIENT_FIELDS[k]])));
+  // Values Sheets turned into dates before the tab was forced to plain text: turn them back into text.
+  const tz = Session.getScriptTimeZone(), iso = /^\d{4}-\d\d-\d\dT\d\d:\d\d/;
+  if (iso.test(o.inv)) o.inv = Utilities.formatDate(new Date(o.inv), tz, 'yyyy-MM-dd');
+  if (iso.test(o.signup)) o.signup = Utilities.formatDate(new Date(o.signup), tz, 'yyyy-MM');
+  if (iso.test(o.paidTill)) { const d = new Date(o.paidTill); o.paidTill = Utilities.formatDate(d, tz, Utilities.formatDate(d, tz, 'd') === '1' ? 'MMMM yyyy' : 'd MMMM'); }
   return o;
 }
 function readClients_() { return read_('clients').map(clientObj_); }
@@ -778,8 +783,14 @@ function saveClient_(patch, me) {
     c.history = [{ t: patch.importNote || 'Client added', by: me.name, at: now }];
     if (patch.note) c.notes = [{ t: String(patch.note), by: me.name, at: now }];
   } else c.history = log.concat(c.history || []);
-  upsert_('clients', 'ID', clientRow_(c));
+  writeClient_(c);
   return { id: c.id };
+}
+// Plain-text format first, so Sheets never turns "May 2027" or an invoice date into a date value.
+function writeClient_(c) {
+  const sh = sheet_('clients');
+  sh.getRange(1, 1, sh.getMaxRows(), TABS.clients.headers.length).setNumberFormat('@');
+  upsert_('clients', 'ID', clientRow_(c));
 }
 function addClientNote_(id, text, me) {
   const c = readClients_().find((x) => x.id === id);
@@ -787,5 +798,5 @@ function addClientNote_(id, text, me) {
   text = String(text || '').trim();
   if (!text) throw new Error('Write a note first');
   c.notes = [{ t: text.slice(0, 2000), by: me.name, at: new Date().toISOString() }].concat(c.notes || []);
-  upsert_('clients', 'ID', clientRow_(c));
+  writeClient_(c);
 }

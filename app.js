@@ -233,7 +233,7 @@
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
     d.docs = d.docs || [];
     d.forms = d.forms || [];
-    d.clients = (d.clients || []).map((c) => Object.assign({ client: '', vaId: '', span: '', shift: '', status: '', pay: '', amount: '', inv: '', paidTill: '', review: '', invoice: '', phone: '', email: '', state: '', tools: '', business: '', signup: '', dcReason: '', created: '' }, c, { notes: Array.isArray(c.notes) ? c.notes : [], history: Array.isArray(c.history) ? c.history : [] }));
+    d.clients = (d.clients || []).map((c) => Object.assign({ client: '', vaId: '', span: '', shift: '', status: '', pay: '', amount: '', inv: '', paidTill: '', review: '', invoice: '', phone: '', email: '', state: '', tools: '', business: '', signup: '', dcReason: '', created: '' }, c, { notes: Array.isArray(c.notes) ? c.notes : [], history: Array.isArray(c.history) ? c.history : [] })).map((c) => { if (/^\d{4}-\d\d-\d\dT/.test(c.inv)) c.inv = isoDay(new Date(c.inv)); return c; });
     d.responses = d.responses || [];
     d.managerList = (d.managerList || d.settings.managers.map((n) => ({ name: n, email: '', owner: false }))).map((m) => Object.assign({ email: '', owner: false }, m));
     return d;
