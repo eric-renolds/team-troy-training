@@ -25,7 +25,8 @@ const SHEET_ID = '1IGhyXRyjX0BneNg94zqsoXRkriQJb2adwQIDbWqaSHQ';
 function ss_() { return SpreadsheetApp.openById(SHEET_ID); }
 
 const TABS = {
-  team: { name: 'VA Team', headers: ['ID', 'Name', 'Role', 'Account', 'Start', 'Active', 'Email'] },
+  team: { name: 'VA Team', headers: ['ID', 'Name', 'Role', 'Account', 'Start', 'Active', 'Email', 'AE ID'] },
+  clients: { name: 'Clients', headers: ['ID', 'VA ID', 'Client', 'Span', 'Shift', 'Status', 'Payment', 'Amount', 'Invoice Date', 'Paid Till', 'Review Link', 'Invoice Link', 'Phone', 'Email', 'State', 'Tools', 'Business', 'Signed Up', 'DC Reason', 'Notes', 'History', 'Created', 'Updated'] },
   skills: { name: 'Skill List', headers: ['Skill', 'Category', 'Active'] },
   ratings: { name: 'Skill Ratings', headers: ['Timestamp', 'Person ID', 'Person', 'Skill', 'Score', 'Manager', 'Note'] },
   training: { name: 'Trainings', headers: ['ID', 'Trainee ID', 'Trainee', 'Trainer ID', 'Trainer', 'Skills', 'Target', 'Start', 'Due', 'Status', 'Notes', 'Created', 'Updated'] },
@@ -155,6 +156,10 @@ function doPost(e) {
         case 'launchForm': result = launchForm_(req.id, req.audience || [], req.due, req.notify !== false, me); break;
         case 'remindForm': result = remindForm_(req.id, me); break;
         case 'setFormStatus': setFormStatus_(req.id, req.status); break;
+        case 'saveClient': result = saveClient_(req.client || {}, me); break;
+        case 'saveClients': result = (req.clients || []).map((c) => saveClient_(c, me)); break;
+        case 'addClientNote': addClientNote_(req.id, req.text, me); break;
+        case 'deleteClient': deleteWhere_('clients', 'ID', req.id); break;
         case 'deleteForm': deleteWhere_('responses', 'Form ID', req.id); deleteWhere_('forms', 'ID', req.id); break;
         case 'savePerson': upsert_('team', 'ID', personRow_(req.person)); break;
         case 'saveRatings': (req.rows || []).forEach((r) => (r.manager = me.name)); if (req.note) req.note.manager = me.name; saveRatings_(req.rows || [], req.note); break;
@@ -293,7 +298,8 @@ function getAll_() {
   const team = read_('team'), byId = {};
   team.forEach((p) => (byId[p.ID] = p));
   return {
-    people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y', email: normEmail_(p.Email) })),
+    people: team.map((p) => ({ id: p.ID, name: p.Name, role: p.Role || 'VA', account: p.Account, start: p.Start, active: String(p.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y', email: normEmail_(p.Email), ae: p['AE ID'] || '' })),
+    clients: readClients_(),
     skills: read_('skills').map((s) => ({ name: s.Skill, category: s.Category || 'Other', active: String(s.Active || 'Y').toUpperCase() === 'N' ? 'N' : 'Y' })),
     ratings: read_('ratings').map((r) => ({ ts: r.Timestamp, personId: r['Person ID'], skill: r.Skill, score: Number(r.Score), manager: r.Manager, note: r.Note })),
     training: read_('training').map((t) => ({ id: t.ID, traineeId: t['Trainee ID'], trainerId: t['Trainer ID'], skills: String(t.Skills || '').split(/\s*;\s*/).filter(String), target: Number(t.Target) || 8, start: t.Start, due: t.Due, status: t.Status || 'Planned', notes: t.Notes, created: t.Created, updated: t.Updated })),
@@ -341,7 +347,7 @@ function personRow_(p) {
   const email = old ? normEmail_(old.Email) : normEmail_(p.email);
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid Gmail address');
   if (email && read_('team').some((r) => normEmail_(r.Email) === email && r.ID !== p.id)) throw new Error(email + ' is already used by another VA');
-  return { ID: p.id || id_('p'), Name: String(p.name).trim(), Role: p.role || 'VA', Account: p.account || '', Start: p.start || '', Active: p.active === 'N' ? 'N' : 'Y', Email: email };
+  return { ID: p.id || id_('p'), Name: String(p.name).trim(), Role: p.role || 'VA', Account: p.account || '', Start: p.start || '', Active: p.active === 'N' ? 'N' : 'Y', Email: email, 'AE ID': p.ae !== undefined ? p.ae : (p.id && (read_('team').find((r) => r.ID === p.id) || {})['AE ID']) || '' };
 }
 
 function saveRatings_(rows, note) {
@@ -735,3 +741,51 @@ function setSetting_(k, v) {
 }
 
 function id_(prefix) { return prefix + Utilities.getUuid().replace(/-/g, '').slice(0, 10); }
+
+/* ============================== clients ============================== */
+// Managers and AEs only: VAs never receive any of this (getMine_ doesn't include it).
+// saveClient_ takes only the fields that changed, merges them, and logs status/shift/payment/VA changes.
+const CLIENT_FIELDS = { vaId: 'VA ID', client: 'Client', span: 'Span', shift: 'Shift', status: 'Status', pay: 'Payment', amount: 'Amount', inv: 'Invoice Date', paidTill: 'Paid Till', review: 'Review Link', invoice: 'Invoice Link', phone: 'Phone', email: 'Email', state: 'State', tools: 'Tools', business: 'Business', signup: 'Signed Up', dcReason: 'DC Reason' };
+const CLIENT_TRACKED = { vaId: 'VA', span: 'Span', shift: 'Shift', status: 'Status', pay: 'Payment' };
+
+function clientObj_(r) {
+  const o = { id: r.ID, notes: parseJson_(r.Notes, []), history: parseJson_(r.History, []), created: r.Created, updated: r.Updated };
+  Object.keys(CLIENT_FIELDS).forEach((k) => (o[k] = r[CLIENT_FIELDS[k]] == null ? '' : String(r[CLIENT_FIELDS[k]])));
+  return o;
+}
+function readClients_() { return read_('clients').map(clientObj_); }
+function clientRow_(c) {
+  const row = { ID: c.id, Notes: JSON.stringify((c.notes || []).slice(0, 200)), History: JSON.stringify((c.history || []).slice(0, 200)), Created: c.created || new Date().toISOString(), Updated: new Date().toISOString() };
+  Object.keys(CLIENT_FIELDS).forEach((k) => (row[CLIENT_FIELDS[k]] = c[k] == null ? '' : String(c[k]).slice(0, 5000)));
+  return row;
+}
+function saveClient_(patch, me) {
+  const old = patch.id ? readClients_().find((x) => x.id === patch.id) : null;
+  const team = {}; read_('team').forEach((p) => (team[p.ID] = p.Name));
+  const c = Object.assign({}, old || { id: patch.id || id_('c'), notes: [], history: [] });
+  const now = new Date().toISOString(), log = [];
+  Object.keys(CLIENT_FIELDS).forEach((k) => {
+    if (patch[k] === undefined) return;
+    const v = String(patch[k] == null ? '' : patch[k]).trim();
+    if (old && CLIENT_TRACKED[k] && String(old[k] || '') !== v) {
+      const show = (x) => (k === 'vaId' ? team[x] || x : x) || '—';
+      log.push({ t: CLIENT_TRACKED[k] + ' changed from ' + show(old[k]) + ' to ' + show(v), by: me.name, at: now });
+    }
+    c[k] = v;
+  });
+  if (!c.vaId || !team[c.vaId]) throw new Error('Choose a VA for this client');
+  if (!old) {
+    c.history = [{ t: patch.importNote || 'Client added', by: me.name, at: now }];
+    if (patch.note) c.notes = [{ t: String(patch.note), by: me.name, at: now }];
+  } else c.history = log.concat(c.history || []);
+  upsert_('clients', 'ID', clientRow_(c));
+  return { id: c.id };
+}
+function addClientNote_(id, text, me) {
+  const c = readClients_().find((x) => x.id === id);
+  if (!c) throw new Error('That client no longer exists');
+  text = String(text || '').trim();
+  if (!text) throw new Error('Write a note first');
+  c.notes = [{ t: text.slice(0, 2000), by: me.name, at: new Date().toISOString() }].concat(c.notes || []);
+  upsert_('clients', 'ID', clientRow_(c));
+}

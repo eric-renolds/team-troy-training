@@ -20,6 +20,7 @@
   /* ------------------------------------------------------------------ icons */
   const P = {
     home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/>',
     team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.6c2.6.2 4.5 1.9 5 5.4"/>',
     training: '<path d="M3 8.5 12 4l9 4.5-9 4.5z"/><path d="M7 10.8V16c0 1.4 2.2 3 5 3s5-1.6 5-3v-5.2"/><path d="M21 8.5V14"/>',
     matrix: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
@@ -232,6 +233,7 @@
     d.settings.reassessDays = Number(d.settings.reassessDays) || 45;
     d.docs = d.docs || [];
     d.forms = d.forms || [];
+    d.clients = (d.clients || []).map((c) => Object.assign({ client: '', vaId: '', span: '', shift: '', status: '', pay: '', amount: '', inv: '', paidTill: '', review: '', invoice: '', phone: '', email: '', state: '', tools: '', business: '', signup: '', dcReason: '', created: '' }, c, { notes: Array.isArray(c.notes) ? c.notes : [], history: Array.isArray(c.history) ? c.history : [] }));
     d.responses = d.responses || [];
     d.managerList = (d.managerList || d.settings.managers.map((n) => ({ name: n, email: '', owner: false }))).map((m) => Object.assign({ email: '', owner: false }, m));
     return d;
@@ -395,7 +397,7 @@
      or have a dialog open, so nothing you are in the middle of gets wiped. */
   const POLL_MS = 10000;
   let polling = false, pending = null;
-  const busy = () => { if ($('dialog[open]') || ui.formDirty) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
+  const busy = () => { if ($('dialog[open]') || ui.formDirty || $('#cl-menu.on')) return true; if ($('#cl-panel.on') && $('#cl-panel').contains(document.activeElement) && document.activeElement.matches('input,textarea')) return true; const a = document.activeElement; return !!(a && a.matches && a.matches('#page input:not([type=radio]):not([type=checkbox]), #page textarea, #page select') && (a.value || '').length); };
   async function poll(force) {
     if (DEMO || !TOKEN || !ME || !DB || polling || inflight) return;
     if (document.hidden && !force) return;
@@ -445,6 +447,7 @@
     { id: 'matrix', href: '#/matrix', label: 'Skill matrix', icon: 'matrix', short: 'Matrix' },
     { id: 'notes', href: '#/notes', label: 'Team notes', icon: 'chat', short: 'Notes' },
     { id: 'guides', href: '#/guides', label: 'Guidebooks', icon: 'book', short: 'Guides' },
+    { id: 'clients', href: '#/clients', label: 'Clients', icon: 'briefcase' },
     { id: 'forms', href: '#/forms', label: 'Forms', icon: 'note' },
   ];
   function route() {
@@ -491,13 +494,14 @@
     derive();
     const r = route();
     if (r.page !== 'notes') ui.notesNew = null;
-    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, guides: pageGuides, forms: pageForms, users: pageUsers, settings: pageSettings };
+    const pages = { home: pageHome, team: pageTeam, va: pageVA, training: pageTraining, matrix: pageMatrix, notes: pageNotes, guides: pageGuides, clients: pageClients, forms: pageForms, users: pageUsers, settings: pageSettings };
     const fn = pages[r.page] || pageHome;
     const out = fn(r);
     const y = window.scrollY;
     $('#app').innerHTML = shell(r, out.crumbs, out.body);
     document.title = (out.title ? out.title + ' · ' : '') + DB.settings.teamName + ' Training Portal';
     if (out.after) out.after();
+    if (ui.clOpen) { if (r.page === 'clients') clPanelRefresh(); else clPanelClose(true); }
     if (render.keepScroll) window.scrollTo(0, y); else window.scrollTo(0, 0);
     render.keepScroll = true;
   }
@@ -1141,6 +1145,275 @@
     uploading = false; window.removeEventListener('beforeunload', leaveGuard);
     panel.finish(done, failed, skipped);
     if (done) { await load().catch(() => {}); render(); }
+  }
+
+  /* ------------------------------------------------------------------ Clients (managers & AEs only)
+     Every client with its VA, span, shift, status, payment, billing, links, notes and history.
+     The tags work like the dropdowns in the monthly sheet; everything else is edited in the side panel.
+     VAs never receive client data from the server. */
+  const CL_OPT = {
+    shift: [['Full-Time', '#D6E6FA', '#1F5FAD'], ['1st-Half', '#FCEBC4', '#8A5A00'], ['2nd-Half', '#FAD9CC', '#A3401E'], ['Shared-VA', '#E6DEFA', '#6B46C1'], ['Available', '#DDF2D9', '#2E7D32'], ['Trial', '#22546B', '#fff'], ['Left', '#C62828', '#fff']],
+    status: [['Satisfied', '#1E7B4F', '#fff'], ['DC', '#C62828', '#fff'], ['Notice Period', '#E05A47', '#fff'], ['New Signup', '#1F5FAD', '#fff'], ['Not satisfied', '#FAD9CC', '#A3401E'], ['Irresponsive', '#8E1F35', '#fff'], ['Concerning', '#E6DEFA', '#6B46C1'], ['Available', '#ECEDEF', '#5F6673']],
+    pay: [['Paid', '#1E7B4F', '#fff'], ['Overdue/Concerning', '#FAD4D4', '#B3261E'], ['Notice Period', '#FCEBC4', '#8A5A00'], ['Pending', '#2F3A4A', '#fff'], ['Invoice Date Upnext', '#ECEDEF', '#5F6673'], ['Not Receivable', '#D32F2F', '#fff'], ['Carry Forward', '#1F5FAD', '#fff']],
+    span: [['1'], ['0.5'], ['0.25']],
+  };
+  const CL_LABEL = { shift: 'Shift', status: 'Status', pay: 'Payment', span: 'Span', vaId: 'VA', client: 'Client', inv: 'Invoice date', amount: 'Amount' };
+  const CL_UNPAID = ['Overdue/Concerning', 'Pending', 'Not Receivable'];
+  const CL_RISK = ['Notice Period', 'Concerning', 'Not satisfied', 'Irresponsive'];
+  const DC_REASONS = ['Financial Issues', 'Not satisfied with work', 'Client became irresponsive', 'Hired in-house', 'Other'];
+  const isAE = (p) => !!p && /AE/.test(p.role || '');
+  const aeOf = (p) => (!p ? null : isAE(p) ? p : person(p.ae) || null);
+  const clIsDC = (c) => c.status === 'DC' || c.shift === 'Left';
+  const clActive = () => DB.clients.filter((c) => c.client && !clIsDC(c));
+  const clMoney = (n) => (n === '' || n == null || isNaN(+n) ? '' : '$' + Number(n).toLocaleString());
+  const clSum = (list) => +list.reduce((a, c) => a + (+c.span || 0), 0).toFixed(2);
+  const clCol = (k, v) => (CL_OPT[k] || []).find((o) => o[0] === v);
+  const clTag = (k, v, id, cls = '') => { const c = clCol(k, v); return `<button type="button" class="cl-tag ${cls} ${v ? '' : 'empty'}" data-cldd="${k}" data-id="${esc(id)}" ${c && c[1] ? `style="background:${c[1]};color:${c[2]}"` : ''}>${esc(v || 'Set')}</button>`; };
+  const clDate = (v) => (v ? fmt(v, { day: 'numeric', month: 'short' }) : '');
+  function clOrderPeople() {
+    const ppl = activePeople().slice();
+    const aes = ppl.filter(isAE).sort((a, b) => (ROLE_RANK[b.role] || 0) - (ROLE_RANK[a.role] || 0) || a.name.localeCompare(b.name));
+    const out = [];
+    aes.forEach((ae) => { out.push(ae); ppl.filter((p) => !isAE(p) && p.ae === ae.id).sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => out.push(p)); });
+    ppl.filter((p) => !out.includes(p)).sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => out.push(p));
+    return out;
+  }
+
+  // ---- saving: one field at a time, with undo
+  function clSet(c, k, v, opts = {}) {
+    const old = c[k] == null ? '' : c[k];
+    v = v == null ? '' : String(v);
+    if (String(old) === v) return;
+    const nameOf = (x) => (k === 'vaId' ? (person(x) || {}).name || '—' : x || '—');
+    save('saveClient', { client: { id: c.id, [k]: v } }, () => {
+      c[k] = v;
+      if (['vaId', 'span', 'shift', 'status', 'pay'].includes(k)) c.history.unshift({ t: `${CL_LABEL[k]} changed from ${nameOf(old)} to ${nameOf(v)}`, by: ME, at: new Date().toISOString() });
+    });
+    if (!opts.quiet) clToast(`${c.client || 'Open slot'}: ${CL_LABEL[k] || 'details'} ${CL_LABEL[k] ? '→ ' + nameOf(v) : 'saved'}`, opts.noUndo ? null : () => clSet(c, k, old, { quiet: true }));
+    if (k === 'status' && v === 'DC' && !c.dcReason) setTimeout(() => clDcDialog(c), 60);
+    clPanelRefresh();
+  }
+  function clToast(msg, undo) {
+    let t = $('#cl-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'cl-toast'; t.className = 'cl-toast'; document.body.appendChild(t); }
+    t.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button type="button">Undo</button>' : ''}`;
+    if (undo) t.querySelector('button').onclick = () => { t.classList.remove('on'); undo(); toast('Change undone'); };
+    t.classList.add('on'); clearTimeout(clToast.t); clToast.t = setTimeout(() => t.classList.remove('on'), 5000);
+  }
+
+  // ---- page
+  function pageClients(r) {
+    const f = ui.cl || (ui.cl = { q: '', ae: '', va: '', st: '', pay: '', kpi: '', view: 'active' });
+    const act = clActive(), aes = activePeople().filter(isAE);
+    const spanFor = (ae) => clSum(act.filter((c) => { const a = aeOf(person(c.vaId)); return a && a.id === ae.id; }));
+    const KP = [
+      ['span', 'Total span', clSum(act), aes.map((a) => a.name.split(' ')[0] + ' ' + spanFor(a)).join(' · ') || 'all clients', (c) => c.client && !clIsDC(c), ''],
+      ['clients', 'Active clients', act.length, `${act.filter((c) => c.status === 'New Signup').length} new signup${act.filter((c) => c.status === 'New Signup').length === 1 ? '' : 's'}`, (c) => c.client && !clIsDC(c), ''],
+      ['risk', 'At risk', act.filter((c) => CL_RISK.includes(c.status)).length, `${act.filter((c) => c.status === 'Notice Period').length} on notice`, (c) => CL_RISK.includes(c.status), '#B3261E'],
+      ['unpaid', 'Unpaid', clMoney(act.filter((c) => CL_UNPAID.includes(c.pay)).reduce((a, c) => a + (+c.amount || 0), 0)) || '$0', `${act.filter((c) => CL_UNPAID.includes(c.pay)).length} client${act.filter((c) => CL_UNPAID.includes(c.pay)).length === 1 ? '' : 's'}`, (c) => CL_UNPAID.includes(c.pay), '#B3261E'],
+      ['review', 'No review link', act.filter((c) => !c.review).length, `${act.filter((c) => !c.invoice).length} without invoice link`, (c) => c.client && !clIsDC(c) && !c.review, '#9A6200'],
+      ['open', 'Open slots', DB.clients.filter((c) => c.status === 'Available' && !c.client).length, 'ready for a client', (c) => c.status === 'Available' && !c.client, '#1F5FAD'],
+    ];
+    const kf = KP.find((k) => k[0] === f.kpi);
+    const order = clOrderPeople().map((p) => p.id);
+    const q = f.q.toLowerCase();
+    const rows = DB.clients.filter((c) => {
+      const p = person(c.vaId), ae = aeOf(p);
+      return (f.view === 'dc' ? clIsDC(c) : !clIsDC(c)) && (!q || (c.client + ' ' + (p ? p.name : '')).toLowerCase().includes(q)) && (!f.ae || (ae && ae.id === f.ae)) && (!f.va || c.vaId === f.va) && (!f.st || c.status === f.st) && (!f.pay || c.pay === f.pay) && (!kf || kf[4](c));
+    }).sort((a, b) => ((order.indexOf(a.vaId) + 1 || 999) - (order.indexOf(b.vaId) + 1 || 999)) || (a.created < b.created ? -1 : 1));
+    let h = '', lastAe = null, lastVa = '';
+    rows.forEach((c) => {
+      const p = person(c.vaId), ae = aeOf(p), aeKey = ae ? ae.id : '-';
+      if (f.view === 'active' && aeKey !== lastAe) {
+        const mine = act.filter((x) => { const a = aeOf(person(x.vaId)); return (a ? a.id : '-') === aeKey; });
+        h += `<tr class="cl-ae"><td colspan="11">${ae ? `${esc(ae.name)} <span class="muted">(${esc(ae.role)})</span>` : '<span class="muted">No AE set</span>'} <span class="muted">· ${mine.length} client${mine.length === 1 ? '' : 's'} · span ${clSum(mine)}</span></td></tr>`;
+        lastAe = aeKey; lastVa = '';
+      }
+      const first = c.vaId !== lastVa || f.view === 'dc'; lastVa = c.vaId;
+      const sc = clCol('status', c.status), note = c.notes[0];
+      h += `<tr class="cl-row ${clIsDC(c) ? 'is-dc' : ''} ${ui.clOpen === c.id ? 'sel' : ''}" data-id="${esc(c.id)}">
+        <td class="cl-va" style="border-left-color:${sc ? sc[1] : 'transparent'}">${first ? `<button type="button" class="cl-link strong" data-cldd="vaId" data-id="${esc(c.id)}">${esc(p ? p.name : 'Removed VA')}</button><small>${esc(p ? p.role : '')}</small>` : `<button type="button" class="cl-link faint" data-cldd="vaId" data-id="${esc(c.id)}" title="Move to another VA">↳ same VA</button>`}</td>
+        <td class="cl-client"><input class="cl-in" data-clf="client" data-id="${esc(c.id)}" value="${esc(c.client)}" placeholder="Open slot: type a client"></td>
+        <td>${clTag('span', c.span, c.id, 'plain')}</td><td>${clTag('shift', c.shift, c.id)}</td><td>${clTag('status', c.status, c.id)}</td><td>${c.client ? clTag('pay', c.pay, c.id) : ''}</td>
+        <td class="hide-sm">${c.client ? `<input type="date" class="cl-in date" data-clf="inv" data-id="${esc(c.id)}" value="${esc(c.inv)}">` : ''}</td>
+        <td class="hide-sm">${c.client ? `<input class="cl-in amt" inputmode="decimal" data-clf="amount" data-id="${esc(c.id)}" value="${esc(c.amount)}" placeholder="$">` : ''}</td>
+        <td class="hide-sm nowrap">${c.client ? `${c.review ? `<a class="cl-link" href="${esc(c.review)}" target="_blank" rel="noopener">Review ↗</a>` : `<button type="button" class="cl-link faint" data-clopen="${esc(c.id)}">+ Review</button>`} · ${c.invoice ? `<a class="cl-link" href="${esc(c.invoice)}" target="_blank" rel="noopener">Invoice ↗</a>` : `<button type="button" class="cl-link faint" data-clopen="${esc(c.id)}">+ Invoice</button>`}` : ''}</td>
+        <td class="hide-sm cl-note" data-clopen="${esc(c.id)}">${note ? `<span class="cl-dot"></span>${esc(note.t.length > 70 ? note.t.slice(0, 70) + '…' : note.t)}` : c.dcReason && clIsDC(c) ? esc(c.dcReason) : '<span class="cl-link faint">+ Note</span>'}</td>
+        <td><button type="button" class="icon-btn" data-clopen="${esc(c.id)}" aria-label="Open ${esc(c.client || 'slot')}">${ic('chevron')}</button></td></tr>`;
+    });
+    const empty = !DB.clients.length ? `<b>No clients yet</b>Add your first client, or ask Claude to import the monthly sheet.` : f.view === 'dc' ? '<b>No discontinued clients</b>Set a client\'s status to DC to move them here with their history.' : '<b>No clients match these filters</b>';
+    const opt = (list, v) => list.map(([val, l]) => `<option value="${esc(val)}" ${v === val ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const body = `<div class="page-head"><div><h1>Clients</h1><p>Click a tag to change it, type straight into cells, or open a client for everything else. Only managers and AEs can see this page.</p></div>
+        <div class="actions"><button class="btn btn-primary" data-act="cl-add">${ic('plus')}Add client</button></div></div>
+      <div class="cl-kpis">${KP.map(([k, l, v, s, , c]) => `<button type="button" class="cl-kpi ${f.kpi === k ? 'on' : ''}" data-act="cl-kpi" data-id="${k}"><b style="${c ? 'color:' + c : ''}">${v}</b><span>${l}</span><small>${esc(s)}</small></button>`).join('')}</div>
+      <div class="cl-bar"><input class="input" id="cl-q" type="search" placeholder="Search client or VA…" value="${esc(f.q)}">
+        <select class="select" data-clfilter="ae"><option value="">All AEs</option>${opt(aes.map((a) => [a.id, a.name]), f.ae)}</select>
+        <select class="select" data-clfilter="va"><option value="">All VAs</option>${opt(activePeople().slice().sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.id, p.name]), f.va)}</select>
+        <select class="select" data-clfilter="st"><option value="">All statuses</option>${opt(CL_OPT.status.map((o) => [o[0], o[0]]), f.st)}</select>
+        <select class="select" data-clfilter="pay"><option value="">All payments</option>${opt(CL_OPT.pay.map((o) => [o[0], o[0]]), f.pay)}</select>
+        <div class="cl-seg">${[['active', 'Active'], ['dc', `Discontinued${DB.clients.filter(clIsDC).length ? ' ' + DB.clients.filter(clIsDC).length : ''}`]].map(([k, l]) => `<button type="button" class="${f.view === k ? 'on' : ''}" data-act="cl-view" data-id="${k}">${l}</button>`).join('')}</div>
+        ${f.q || f.ae || f.va || f.st || f.pay || f.kpi ? '<button class="btn btn-ghost btn-sm" data-act="cl-clear">Clear</button>' : ''}</div>
+      <section class="card cl-card"><div class="cl-wrap"><table class="cl-table"><thead><tr><th>VA</th><th>Client</th><th>Span</th><th>Shift</th><th>Status</th><th>Payment</th><th class="hide-sm">Invoice date</th><th class="hide-sm">Amount</th><th class="hide-sm">Links</th><th class="hide-sm">Latest note</th><th></th></tr></thead>
+        <tbody>${h || `<tr><td colspan="11"><div class="empty">${empty}</div></td></tr>`}</tbody></table></div></section>`;
+    return {
+      title: 'Clients', crumbs: '<b>Clients</b>', body,
+      after() {
+        const qi = $('#cl-q');
+        qi.addEventListener('input', () => { f.q = qi.value; clearTimeout(qi.t); qi.t = setTimeout(() => { render(); const n = $('#cl-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
+        $$('[data-clfilter]').forEach((s) => s.addEventListener('change', () => { f[s.dataset.clfilter] = s.value; render(); }));
+        $$('.cl-in').forEach((i) => {
+          i.addEventListener('change', () => {
+            const c = DB.clients.find((x) => x.id === i.dataset.id); if (!c) return;
+            const v = i.value.replace(/^\$/, '').trim();
+            if (i.dataset.clf === 'client' && !c.client && v && c.status === 'Available') { // typing into an open slot fills it
+              const vals = { client: v, status: 'New Signup', pay: c.pay || 'Invoice Date Upnext', shift: c.shift === 'Available' ? 'Full-Time' : c.shift };
+              return save('saveClient', { client: Object.assign({ id: c.id }, vals) }, () => { Object.assign(c, vals); c.history.unshift({ t: 'Open slot filled with ' + v, by: ME, at: new Date().toISOString() }); }, v + ' added as a new signup');
+            }
+            clSet(c, i.dataset.clf, v);
+          });
+          i.addEventListener('keydown', (e) => { if (e.key === 'Enter') i.blur(); });
+        });
+      },
+    };
+  }
+
+  // ---- tag dropdowns (same options and colours as the sheet)
+  let clMenuFor = null;
+  function clMenu(btn) {
+    const k = btn.dataset.cldd, c = DB.clients.find((x) => x.id === btn.dataset.id); if (!c) return;
+    let m = $('#cl-menu');
+    if (!m) { m = document.createElement('div'); m.id = 'cl-menu'; m.className = 'cl-menu'; m.setAttribute('role', 'menu'); document.body.appendChild(m); wireClMenu(m); }
+    clMenuFor = { k, c };
+    const opts = k === 'vaId' ? clOrderPeople().map((p) => [p.id, null, null, p.name, p.role]) : CL_OPT[k];
+    m.innerHTML = `<div class="mh">${CL_LABEL[k]}</div>` + opts.map((o) => `<button type="button" role="menuitem" data-v="${esc(o[0])}">${k === 'vaId' ? `<span>${esc(o[3])} <span class="muted" style="font-size:12px">${esc(o[4])}</span></span>` : k === 'span' ? `<span>${o[0]}</span>` : `<span class="cl-tag" style="background:${o[1]};color:${o[2]}">${esc(o[0])}</span>`}${String(c[k]) === o[0] ? '<span class="chk">✓</span>' : ''}</button>`).join('') + (k !== 'vaId' ? '<button type="button" data-v=""><span class="muted">Clear</span></button>' : '');
+    m.classList.add('on');
+    const b = btn.getBoundingClientRect(), mh = m.offsetHeight;
+    m.style.left = Math.max(8, Math.min(b.left, innerWidth - m.offsetWidth - 10)) + 'px';
+    m.style.top = (b.bottom + mh + 8 > innerHeight ? Math.max(8, b.top - mh - 6) : b.bottom + 6) + 'px';
+    (m.querySelector('.chk') ? m.querySelector('.chk').closest('button') : m.querySelector('button')).focus();
+  }
+  function clMenuClose() { const m = $('#cl-menu'); if (m) m.classList.remove('on'); clMenuFor = null; }
+  function wireClMenu(m) {
+    m.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b || !clMenuFor) return; const { k, c } = clMenuFor; clMenuClose(); clSet(c, k, b.dataset.v); });
+    m.addEventListener('keydown', (e) => { const bs = $$('button', m), i = bs.indexOf(document.activeElement); if (e.key === 'ArrowDown') { e.preventDefault(); (bs[i + 1] || bs[0]).focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (bs[i - 1] || bs[bs.length - 1]).focus(); } if (e.key === 'Escape') clMenuClose(); });
+  }
+  document.addEventListener('click', (e) => {
+    const dd = e.target.closest('[data-cldd]'); if (dd) { e.preventDefault(); e.stopPropagation(); clMenu(dd); return; }
+    if (!e.target.closest('#cl-menu')) clMenuClose();
+    const op = e.target.closest('[data-clopen]'); if (op) { e.preventDefault(); clPanelOpen(op.dataset.clopen); }
+  }, true);
+  window.addEventListener('scroll', clMenuClose, true);
+  window.addEventListener('hashchange', () => { clMenuClose(); clPanelClose(true); });
+
+  // ---- side panel: everything about one client, editable, saves as you go
+  function clPanelOpen(id) {
+    ui.clOpen = id;
+    let p = $('#cl-panel');
+    if (!p) {
+      p = document.createElement('aside'); p.id = 'cl-panel'; p.className = 'cl-panel'; p.setAttribute('aria-label', 'Client details');
+      const s = document.createElement('div'); s.id = 'cl-scrim'; s.className = 'cl-scrim'; s.onclick = () => clPanelClose();
+      document.body.append(s, p);
+      p.addEventListener('change', (e) => { const i = e.target.closest('[data-clpf]'); const c = DB.clients.find((x) => x.id === ui.clOpen); if (i && c) clSet(c, i.dataset.clpf, i.value.trim(), { noUndo: false }); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.clOpen && !$('#cl-menu.on') && !$('dialog[open]')) clPanelClose(); });
+    }
+    clPanelRefresh(true);
+    p.classList.add('on'); $('#cl-scrim').classList.add('on');
+    $$('.cl-row').forEach((t) => t.classList.toggle('sel', t.dataset.id === id));
+  }
+  function clPanelClose(silent) {
+    ui.clOpen = null;
+    const p = $('#cl-panel'); if (p) p.classList.remove('on'); const s = $('#cl-scrim'); if (s) s.classList.remove('on');
+    if (!silent) $$('.cl-row.sel').forEach((t) => t.classList.remove('sel'));
+  }
+  function clPanelRefresh(force) {
+    const p = $('#cl-panel'), c = ui.clOpen && DB.clients.find((x) => x.id === ui.clOpen);
+    if (!p || !c) { if (p && ui.clOpen && !c) clPanelClose(); return; }
+    if (!force && p.contains(document.activeElement) && document.activeElement.matches('input,textarea,select')) return; // don't wipe what's being typed
+    const st = p.scrollTop, va = person(c.vaId), ae = aeOf(va);
+    const inp = (k, l, type = 'text', ph = '', full) => `<label class="field ${full ? 'full' : ''}"><span>${l}</span><input class="input" type="${type}" data-clpf="${k}" value="${esc(c[k])}" placeholder="${esc(ph)}"></label>`;
+    const when = (v) => (v && !isNaN(new Date(v)) ? fmt(v, { day: 'numeric', month: 'short', year: 'numeric' }) : v || '');
+    p.innerHTML = `<div class="cl-ph"><button type="button" class="icon-btn cl-x" data-act="cl-close" aria-label="Close">${ic('x')}</button>
+        <input class="cl-title" data-clpf="client" value="${esc(c.client)}" placeholder="Client name">
+        <div class="cl-chips">${clTag('status', c.status, c.id)}${clTag('shift', c.shift, c.id)}${c.client ? clTag('pay', c.pay, c.id) : ''}</div></div>
+      <div class="cl-sec"><h3>Assignment</h3><div class="cl-form">
+        <div class="field"><span>VA</span><button type="button" class="btn cl-pick" data-cldd="vaId" data-id="${esc(c.id)}">${esc(va ? va.name : 'Choose…')}<span class="muted">▾</span></button></div>
+        <div class="field"><span>AE</span><input class="input" value="${esc(ae ? ae.name : 'Not set on the VA')}" disabled></div>
+        <div class="field"><span>Span</span><button type="button" class="btn cl-pick" data-cldd="span" data-id="${esc(c.id)}">${esc(c.span || '—')}<span class="muted">▾</span></button></div>
+        ${inp('signup', 'Signed up', 'month')}</div></div>
+      <div class="cl-sec"><h3>Contact & business</h3><div class="cl-form">
+        ${inp('phone', 'Phone', 'tel', '(555) 123-4567')}${inp('email', 'Email', 'email', 'client@email.com')}${inp('state', 'State', 'text', 'e.g. Florida')}${inp('tools', 'Tools', 'text', 'Follow Up Boss, Canva…')}
+        <label class="field full"><span>Business details</span><textarea class="textarea" data-clpf="business" placeholder="Team, brokerage, niche, what the VA handles">${esc(c.business)}</textarea></label></div></div>
+      <div class="cl-sec"><h3>Billing</h3><div class="cl-form">${inp('amount', 'Monthly amount ($)', 'number')}${inp('inv', 'Invoice date', 'date')}${inp('paidTill', 'Paid till', 'text', 'e.g. May 2027')}
+        <div class="field"><span>Payment</span><div>${c.client ? clTag('pay', c.pay, c.id) : '—'}</div></div></div></div>
+      <div class="cl-sec"><h3>Links</h3><div class="cl-form">${inp('review', 'Review / feedback link', 'url', 'https://…', 1)}${inp('invoice', 'Invoice link', 'url', 'https://…', 1)}</div></div>
+      ${clIsDC(c) ? `<div class="cl-sec"><h3>Discontinued</h3><div class="cl-form"><label class="field full"><span>Reason</span><textarea class="textarea" data-clpf="dcReason">${esc(c.dcReason)}</textarea></label></div></div>` : ''}
+      <div class="cl-sec"><h3>Notes</h3><form class="cl-addnote" data-clnote><input class="input" name="t" placeholder="Add a note… (Enter to save)" autocomplete="off"><button class="btn">Add</button></form>
+        <ul class="cl-tl">${c.notes.map((n) => `<li>${esc(n.t)}<small>${esc(when(n.at))} · ${esc(n.by || '')}</small></li>`).join('') || '<li class="sys muted">No notes yet</li>'}</ul></div>
+      <div class="cl-sec"><h3>History</h3><ul class="cl-tl">${c.history.map((x) => `<li class="sys">${esc(x.t)}<small>${esc(when(x.at))}${x.by ? ' · ' + esc(x.by) : ''}</small></li>`).join('') || '<li class="sys muted">Nothing yet</li>'}</ul></div>
+      <div class="cl-pfoot"><span class="muted">Changes save automatically</span><span style="flex:1"></span>${clIsDC(c) ? `<button type="button" class="btn" data-act="cl-restore" data-id="${esc(c.id)}">Restore client</button>` : c.client ? `<button type="button" class="btn btn-danger" data-act="cl-dc" data-id="${esc(c.id)}">Mark as DC</button>` : ''}<button type="button" class="btn btn-ghost btn-danger" data-act="cl-del" data-id="${esc(c.id)}">Delete</button></div>`;
+    p.scrollTop = st;
+    p.querySelector('[data-clnote]').addEventListener('submit', (e) => {
+      e.preventDefault(); const i = e.target.t, v = i.value.trim(); if (!v) return;
+      save('addClientNote', { id: c.id, text: v }, () => c.notes.unshift({ t: v, by: ME, at: new Date().toISOString() }), 'Note added');
+      clPanelRefresh(true); const n = $('#cl-panel [data-clnote] input'); if (n) n.focus();
+    });
+  }
+
+  // ---- dialogs
+  function clAddDialog() {
+    const ppl = clOrderPeople(), f = ui.cl || {};
+    const sel = (n, list, v) => `<select class="select" name="${n}">${list.map(([val, l]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    modal({
+      title: 'Add client', submit: 'Add client',
+      body: `<label class="field"><span>Client name</span><input class="input" name="client" required autocomplete="off"></label>
+        <div class="row2"><label class="field"><span>VA</span>${sel('vaId', ppl.map((p) => [p.id, p.name + ' · ' + p.role]), f.va || '')}</label><label class="field"><span>Span</span>${sel('span', CL_OPT.span.map((o) => [o[0], o[0]]), '0.5')}</label></div>
+        <div class="row2"><label class="field"><span>Shift</span>${sel('shift', CL_OPT.shift.map((o) => [o[0], o[0]]), '1st-Half')}</label><label class="field"><span>Status</span>${sel('status', CL_OPT.status.map((o) => [o[0], o[0]]), 'New Signup')}</label></div>
+        <div class="row2"><label class="field"><span>Monthly amount ($)</span><input class="input" name="amount" type="number" min="0"></label><label class="field"><span>Signed up</span><input class="input" name="signup" type="month" value="${isoDay(new Date()).slice(0, 7)}"></label></div>
+        <small class="muted">If this VA has an open slot, the client fills it.</small>`,
+      onSubmit(fd) {
+        const name = String(fd.get('client')).trim();
+        if (DB.clients.some((c) => c.client.toLowerCase() === name.toLowerCase() && !clIsDC(c)) && !confirm(name + ' is already on the list. Add another entry?')) return false;
+        const vals = { client: name, vaId: fd.get('vaId'), span: fd.get('span'), shift: fd.get('shift'), status: fd.get('status'), pay: 'Invoice Date Upnext', amount: fd.get('amount') || '', signup: fd.get('signup') || '' };
+        const slot = DB.clients.find((c) => c.vaId === vals.vaId && !c.client && c.status === 'Available');
+        if (slot) {
+          save('saveClient', { client: Object.assign({ id: slot.id }, vals) }, () => { Object.assign(slot, vals); slot.history.unshift({ t: 'Open slot filled with ' + name, by: ME, at: new Date().toISOString() }); }, `${name} added (filled an open slot)`);
+          setTimeout(() => clPanelOpen(slot.id), 50);
+        } else {
+          const c = Object.assign({ id: 'c' + uid(), phone: '', email: '', state: '', tools: '', business: '', inv: '', paidTill: '', review: '', invoice: '', dcReason: '', notes: [], history: [{ t: 'Client added', by: ME, at: new Date().toISOString() }], created: new Date().toISOString() }, vals);
+          save('saveClient', { client: Object.assign({ id: c.id }, vals) }, () => DB.clients.push(c), name + ' added');
+          setTimeout(() => clPanelOpen(c.id), 50);
+        }
+      },
+    });
+  }
+  function clDcDialog(c) {
+    modal({
+      title: `Discontinue ${esc(c.client)}?`, submit: 'Discontinue',
+      body: `<p class="muted" style="margin:0">They move to the Discontinued list with their notes and history kept.</p>
+        <label class="field"><span>Reason</span><select class="select" name="pre">${DC_REASONS.map((o) => `<option>${o}</option>`).join('')}</select></label>
+        <label class="field"><span>Details <span class="muted" style="font-weight:400">(optional)</span></span><textarea class="textarea" name="det"></textarea></label>`,
+      onSubmit(fd) {
+        const reason = fd.get('pre') + (String(fd.get('det') || '').trim() ? ': ' + String(fd.get('det')).trim() : '');
+        save('saveClient', { client: { id: c.id, dcReason: reason, status: 'DC' } }, () => { c.dcReason = reason; c.status = 'DC'; }, c.client + ' moved to Discontinued');
+        clPanelRefresh(true);
+      },
+    });
+  }
+  function clAction(act, id) {
+    const f = ui.cl || (ui.cl = { q: '', ae: '', va: '', st: '', pay: '', kpi: '', view: 'active' }), c = DB.clients.find((x) => x.id === id);
+    if (act === 'cl-add') return clAddDialog();
+    if (act === 'cl-kpi') { f.kpi = f.kpi === id ? '' : id; if (f.kpi) f.view = 'active'; return render(); }
+    if (act === 'cl-view') { f.view = id; f.kpi = ''; return render(); }
+    if (act === 'cl-clear') { Object.assign(f, { q: '', ae: '', va: '', st: '', pay: '', kpi: '' }); return render(); }
+    if (act === 'cl-close') return clPanelClose();
+    if (!c) return;
+    if (act === 'cl-dc') return clDcDialog(c);
+    if (act === 'cl-restore') { save('saveClient', { client: { id: c.id, status: 'Satisfied', shift: c.shift === 'Left' ? 'Full-Time' : c.shift, dcReason: '' } }, () => { c.history.unshift({ t: 'Restored from Discontinued', by: ME, at: new Date().toISOString() }); c.status = 'Satisfied'; if (c.shift === 'Left') c.shift = 'Full-Time'; c.dcReason = ''; }, c.client + ' restored'); return clPanelRefresh(true); }
+    if (act === 'cl-del') {
+      if (!confirm(`Delete ${c.client || 'this open slot'} for good?\n\nIts notes and history are deleted too.${c.client && !clIsDC(c) ? ' To keep them, use "Mark as DC" instead.' : ''}`)) return;
+      clPanelClose();
+      return save('deleteClient', { id: c.id }, () => { DB.clients = DB.clients.filter((x) => x !== c); }, 'Deleted');
+    }
   }
 
   /* ------------------------------------------------------------------ Forms
@@ -1813,6 +2086,7 @@
           <label class="field"><span>Client / account</span><input class="input" name="account" value="${esc(p ? p.account : '')}"></label></div>
         <div class="row2"><label class="field"><span>Start date</span><input class="input" type="date" name="start" value="${esc(p ? p.start : isoDay(new Date()))}"></label>
           <label class="field"><span>Status</span><select class="select" name="active"><option value="Y" ${!p || p.active !== 'N' ? 'selected' : ''}>Active</option><option value="N" ${p && p.active === 'N' ? 'selected' : ''}>Inactive</option></select></label></div>
+        ${(() => { const aes = activePeople().filter((x) => /AE/.test(x.role || '') && (!p || x.id !== p.id)); return `<label class="field"><span>AE <span class="muted" style="font-weight:400">(groups their clients on the Clients page)</span></span><select class="select" name="ae"><option value="">None</option>${aes.map((a) => `<option value="${esc(a.id)}" ${p && p.ae === a.id ? 'selected' : ''}>${esc(a.name)} · ${esc(a.role)}</option>`).join('')}</select></label>`; })()}
         <label class="field"><span>Gmail <span class="muted" style="font-weight:400">(optional)</span></span><input class="input" type="email" name="email" value="${esc(p ? p.email || '' : '')}" placeholder="name@gmail.com" autocomplete="off"><small>Lets this VA sign in to see their own training and quizzes. They never see ratings, notes or other VAs. Leave empty to keep them out.</small></label>`,
       onSubmit(f) {
         const name = String(f.get('name')).trim().replace(/\s+/g, ' ');
@@ -1820,7 +2094,7 @@
         const email = String(f.get('email') || '').trim().toLowerCase();
         if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid Gmail address', true); return false; }
         if (email && DB.people.some((x) => x.email === email && (!p || x.id !== p.id))) { toast(email + ' is already used by another VA', true); return false; }
-        const rec = Object.assign({}, p || { id: 'p' + uid() }, { name, role: f.get('role'), account: String(f.get('account')).trim(), start: f.get('start'), active: f.get('active'), email });
+        const rec = Object.assign({}, p || { id: 'p' + uid() }, { name, role: f.get('role'), account: String(f.get('account')).trim(), start: f.get('start'), active: f.get('active'), email, ae: f.get('ae') || '' });
         save('savePerson', { person: rec }, () => { DB.people = DB.people.filter((x) => x.id !== rec.id).concat(rec); }, p ? 'Saved' : name + ' added');
         if (!p) { render.keepScroll = false; location.hash = '#/va/' + rec.id; }
       },
@@ -1864,7 +2138,7 @@
     d.innerHTML = `<div class="palette-input">${ic('search')}<input type="text" placeholder="Search VAs, pages or actions…" aria-label="Search" autocomplete="off"></div><ul class="palette-list" role="listbox"></ul>`;
     document.body.appendChild(d);
     const input = $('input', d), list = $('ul', d);
-    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Guidebooks', '#/guides'], ['Forms', '#/forms'], ['Users', '#/users'], ['Settings', '#/settings']];
+    const pages = [['Home', '#/'], ['Team', '#/team'], ['Training', '#/training'], ['Trainers', '#/training/trainers'], ['Skill matrix', '#/matrix'], ['Team notes', '#/notes'], ['Guidebooks', '#/guides'], ['Clients', '#/clients'], ['Forms', '#/forms'], ['Users', '#/users'], ['Settings', '#/settings']];
     const actions = [['Rate a VA', () => rateDialog()], ['New training', () => trainingDialog({})], ['Add VA', () => personDialog()], ['Post a team note', () => newTeamNote()]];
     let items = [], sel = 0;
     const draw = () => {
@@ -1948,6 +2222,7 @@
       case 'del-rating': return deleteSkillRating(id, el.dataset.skill);
       case 'del-session': return deleteSession(id, el.dataset.day, el.dataset.manager);
       case 'tnote-new': return newTeamNote();
+      case 'cl-add': case 'cl-kpi': case 'cl-view': case 'cl-clear': case 'cl-close': case 'cl-dc': case 'cl-restore': case 'cl-del': return clAction(el.dataset.act, id);
       case 'b-addq': case 'b-delq': case 'b-up': case 'b-down': case 'b-states': case 'b-addsec': case 'b-delsec': case 'b-template': case 'b-save': return builderAction(el.dataset.act, el);
       case 'f-launch': return launchDialog(id);
       case 'f-remind': return (async () => { try { toast('Sending reminders…', false, 'clock'); inflight++; let j; try { j = await api('remindForm', { id }); } finally { inflight--; } const r = j.result || {}; toast(`Reminded ${r.sent} VA${r.sent === 1 ? '' : 's'}${r.failed && r.failed.length ? ' · ' + r.failed.length + ' failed' : ''}`, !!(r.failed && r.failed.length)); } catch (e2) { toast(e2.message, true); } })();
